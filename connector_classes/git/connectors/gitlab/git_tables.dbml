@@ -1,0 +1,182 @@
+// Git Schema DBML - Optimized Structure (FINAL)
+// Schema: git
+// Use https://dbdiagram.io or dbml-cli to visualize
+
+Project git_schema {
+  database_type: 'PostgreSQL'
+  Note: 'Git data schema for sources/git service - OPTIMIZED'
+}
+
+// ===========================================
+// Repository Management
+// ===========================================
+
+Table git.repo {
+  id integer [pk, increment, note: 'Internal primary key']
+  gitlab_repo_id integer [unique, not null, note: 'GitLab project ID']
+  path varchar(500) [not null, note: 'Repository path (e.g., group/project)']
+  kind varchar(20) [note: 'GitLab namespace kind: user (personal) or group']
+  last_activity_at timestamp [note: 'Last activity from GitLab API']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    gitlab_repo_id
+    path
+    last_activity_at
+    kind
+  }
+
+  Note: 'All GitLab repositories (including personal). Only group repos have commits synced.'
+}
+
+// ===========================================
+// Author Management (NEW)
+// ===========================================
+
+Table git.author {
+  id integer [pk, increment, note: 'Auto-increment primary key']
+  name varchar(255) [note: 'Original author name (nullable, preserves case)']
+  email varchar(255) [note: 'Original author email (nullable, preserves case)']
+  name_lower varchar(255) [note: 'GENERATED: COALESCE(LOWER(name), empty string)']
+  email_lower varchar(255) [note: 'GENERATED: COALESCE(LOWER(email), empty string)']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (name_lower, email_lower) [unique, note: 'Unique author by normalized name+email']
+    email_lower [note: 'Fast lookup by email']
+  }
+
+  Note: 'Unique commit authors. Allows NULL name/email. Generated columns use COALESCE for uniqueness.'
+}
+
+// ===========================================
+// Branch Management
+// ===========================================
+
+Table git.branch {
+  id integer [pk, increment]
+  repo_id integer [not null, note: 'References repo.gitlab_repo_id']
+  name varchar(500) [not null, note: 'Branch name (e.g., main, feature/xyz)']
+  is_default boolean [default: false, note: 'True if this is the default branch']
+  last_commit_hash varchar(40) [note: 'Last known commit hash on this branch']
+  last_synced_at timestamp [note: 'When this branch was last synced']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (repo_id, name) [unique]
+    repo_id
+    is_default
+  }
+
+  Note: 'Git branches in repositories'
+}
+
+Ref: git.branch.repo_id > git.repo.gitlab_repo_id [delete: cascade]
+
+// ===========================================
+// File Management
+// ===========================================
+
+Table git.file {
+  id integer [pk, increment]
+  repo_id integer [not null, note: 'References repo.gitlab_repo_id']
+  path text [not null, note: 'File path within repository']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (repo_id, path) [unique]
+    repo_id
+  }
+
+  Note: 'All files that have ever existed in repositories'
+}
+
+Ref: git.file.repo_id > git.repo.gitlab_repo_id [delete: cascade]
+
+// ===========================================
+// Commits (OPTIMIZED)
+// ===========================================
+
+Table git.commit {
+  id bigint [pk, increment, note: 'Auto-increment primary key']
+  hash varchar(40) [not null, note: 'Git commit SHA']
+  repo_id integer [not null, note: 'References repo.gitlab_repo_id']
+  author_id integer [not null, note: 'References author.id']
+  parents text[] [note: 'Parent commit hashes']
+  message text [note: 'Full multi-line commit message']
+  task_id varchar(50) [note: 'Extracted task ID (e.g., MON-123)']
+  default_branch boolean [default: false, note: 'True if commit exists in default branch']
+  created_at timestamp [not null, note: 'Commit timestamp']
+
+  indexes {
+    (repo_id, hash) [unique, note: 'Ensures unique commit per repo']
+    hash [note: 'For finding same commit across forks']
+    repo_id
+    author_id [note: 'For finding commits by author']
+    task_id
+    default_branch
+    created_at
+    (repo_id, created_at) [note: 'For date-range queries within repo']
+    (author_id, created_at) [note: 'For author activity over time']
+  }
+
+  Note: 'Git commits from ALL branches in monitored repositories'
+}
+
+Ref: git.commit.repo_id > git.repo.gitlab_repo_id [delete: cascade]
+Ref: git.commit.author_id > git.author.id
+
+// ===========================================
+// NumStat (with commit_id FK)
+// ===========================================
+
+Table git.num_stat {
+  id integer [pk, increment]
+  commit_id bigint [not null, note: 'References commit.id']
+  file_id integer [not null, note: 'References file.id']
+  added integer [default: 0, note: 'Lines added']
+  removed integer [default: 0, note: 'Lines removed']
+
+  indexes {
+    (commit_id, file_id) [unique, note: 'One record per file per commit']
+    commit_id
+    file_id
+    (file_id, added) [note: 'For file change statistics']
+  }
+
+  Note: 'Per-file line changes for each commit (git numstat output)'
+}
+
+Ref: git.num_stat.commit_id > git.commit.id [delete: cascade]
+Ref: git.num_stat.file_id > git.file.id [delete: cascade]
+
+// ===========================================
+// LOC Snapshots
+// ===========================================
+
+Table git.loc {
+  id integer [pk, increment]
+  repo_id integer [not null, note: 'References repo.gitlab_repo_id']
+  file_id integer [not null, note: 'References file.id']
+  loc integer [not null, note: 'Lines of code count (0 for deleted/binary files)']
+  snapshot_date date [not null, note: 'UTC date for daily LOC snapshot']
+  commit_id integer [not null, note: 'Default branch HEAD commit at snapshot time']
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`, note: 'Snapshot timestamp']
+
+  indexes {
+    (repo_id, file_id, snapshot_date) [unique, note: 'One LOC row per file per day']
+    repo_id
+    file_id
+    snapshot_date
+    (repo_id, snapshot_date) [note: 'Daily snapshot queries by repo']
+    created_at
+    (file_id, created_at) [note: 'For latest LOC per file queries']
+    (repo_id, created_at) [note: 'For LOC history per repo']
+  }
+
+  Note: 'Lines of code snapshots for files'
+}
+
+Ref: git.loc.repo_id > git.repo.gitlab_repo_id [delete: cascade]
+Ref: git.loc.file_id > git.file.id [delete: cascade]
+Ref: git.loc.commit_id > git.commit.id [delete: cascade]

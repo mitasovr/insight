@@ -1,0 +1,98 @@
+Table public.ms365_email_activity {
+  unique text [pk, not null]
+  isDeleted boolean [not null]
+  readCount numeric [not null]
+  sendCount numeric [not null]
+  displayName text [not null]
+  receiveCount numeric [not null]
+  reportPeriod text [not null]
+  assignedProducts jsonb [not null]
+  lastActivityDate date
+  reportRefreshDate date [not null]
+  userPrincipalName text [not null]
+  meetingCreatedCount numeric [not null]
+  meetingInteractedCount numeric [not null]
+
+  indexes {
+    reportRefreshDate [name: "idx_ms365_email_activity_report_refresh_date"]
+    userPrincipalName [name: "idx_ms365_email_activity_user_principal_name"]
+  }
+}
+
+Table public.ms365_teams_activity {
+  unique text [pk, not null]
+  userId text [not null]
+  callCount numeric [not null]
+  isDeleted boolean [not null]
+  isExternal boolean [not null]
+  isLicensed boolean [not null]
+  meetingCount numeric [not null]
+  postMessages numeric [not null]
+  reportPeriod text [not null]
+  audioDuration text [not null]
+  replyMessages numeric [not null]
+  videoDuration text [not null]
+  hasOtherAction boolean [not null]
+  urgentMessages numeric [not null]
+  assignedProducts jsonb [not null]
+  lastActivityDate date [not null]
+  reportRefreshDate date [not null]
+  tenantDisplayName text [not null]
+  userPrincipalName text [not null]
+  screenShareDuration text [not null]
+  teamChatMessageCount numeric [not null]
+  meetingsAttendedCount numeric [not null]
+  meetingsOrganizedCount numeric [not null]
+  privateChatMessageCount numeric [not null]
+  adHocMeetingsAttendedCount numeric [not null]
+  adHocMeetingsOrganizedCount numeric [not null]
+  sharedChannelTenantDisplayNames text [not null]
+  scheduledOneTimeMeetingsAttendedCount numeric [not null]
+  scheduledOneTimeMeetingsOrganizedCount numeric [not null]
+  scheduledRecurringMeetingsAttendedCount numeric [not null]
+  scheduledRecurringMeetingsOrganizedCount numeric [not null]
+
+  indexes {
+    reportRefreshDate [name: "idx_ms365_teams_activity_report_refresh_date"]
+    userPrincipalName [name: "idx_ms365_teams_activity_user_principal_name"]
+  }
+}
+
+Table public.ms365_onedrive_activity {
+  unique text [pk, not null]
+  isDeleted boolean [not null]
+  reportPeriod text [not null]
+  syncedFileCount numeric [not null]
+  assignedProducts jsonb [not null]
+  lastActivityDate date [not null]
+  reportRefreshDate date [not null]
+  userPrincipalName text [not null]
+  viewedOrEditedFileCount numeric [not null]
+  sharedExternallyFileCount numeric [not null]
+  sharedInternallyFileCount numeric [not null]
+
+  indexes {
+    reportRefreshDate [name: "idx_ms365_onedrive_activity_report_refresh_date"]
+    userPrincipalName [name: "idx_ms365_onedrive_activity_user_principal_name"]
+  }
+}
+
+Table public.ms365_sharepoint_activity {
+  unique text [pk, not null]
+  isDeleted boolean [not null]
+  reportPeriod text [not null]
+  syncedFileCount numeric [not null]
+  assignedProducts jsonb [not null]
+  lastActivityDate date [not null]
+  visitedPageCount numeric [not null]
+  reportRefreshDate date [not null]
+  userPrincipalName text [not null]
+  viewedOrEditedFileCount numeric [not null]
+  sharedExternallyFileCount numeric [not null]
+  sharedInternallyFileCount numeric [not null]
+
+  indexes {
+    reportRefreshDate [name: "idx_ms365_sharepoint_activity_report_refresh_date"]
+    userPrincipalName [name: "idx_ms365_sharepoint_activity_user_principal_name"]
+  }
+}

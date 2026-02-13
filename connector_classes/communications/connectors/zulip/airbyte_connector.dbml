@@ -1,0 +1,26 @@
+Table public.zulip_users {
+  id bigint [pk, not null]
+  role numeric [not null]
+  uuid text [not null]
+  email text [not null]
+  full_name text [not null]
+  is_active boolean [not null]
+  recipient_id bigint [not null]
+
+  indexes {
+    email [name: "idx_zulip_users_email"]
+    uuid [name: "idx_zulip_users_uuid"]
+  }
+}
+
+Table public.zulip_messages {
+  uniq text [pk, not null]
+  count numeric [not null]
+  sender_id bigint [not null]
+  created_at timestamptz [not null]
+
+  indexes {
+    created_at [name: "idx_zulip_messages_created_at"]
+    sender_id [name: "idx_zulip_messages_sender_id"]
+  }
+}

@@ -1,0 +1,541 @@
+spec:
+  type: Spec
+  connection_specification:
+    type: object
+    $schema: http://json-schema.org/draft-07/schema#
+    required:
+      - client_id
+      - client_secret
+      - tenant_id
+    properties:
+      client_id:
+        type: string
+        order: 0
+        title: Client ID
+      tenant_id:
+        type: string
+        order: 2
+        title: Tenant Id
+      client_secret:
+        type: string
+        order: 1
+        title: Client Secret
+        airbyte_secret: true
+    additionalProperties: true
+type: DeclarativeSource
+check:
+  type: CheckStream
+  stream_names:
+    - email_activity
+streams:
+  - name: email_activity
+    type: DeclarativeStream
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: DefaultPaginator
+        page_token_option:
+          type: RequestOption
+          field_name: skiptoken
+          inject_into: request_parameter
+        pagination_strategy:
+          type: CursorPagination
+          cursor_value: >-
+            {{ response['@odata.nextLink'].split('$skiptoken=')[1] if
+            response['@odata.nextLink'] is defined else None }}
+          stop_condition: '{{ response[''@odata.nextLink''] is not defined }}'
+      requester:
+        path: >-
+          /beta/reports/getEmailActivityUserDetail(date={{
+          stream_interval.start_time[:10] }})
+        type: HttpRequester
+        url_base: https://graph.microsoft.com/
+        http_method: GET
+        authenticator:
+          type: SessionTokenAuthenticator
+          login_requester:
+            path: token
+            type: HttpRequester
+            url_base: >-
+              https://login.microsoftonline.com/{{ config['tenant_id']
+              }}/oauth2/v2.0
+            http_method: POST
+            authenticator:
+              type: NoAuth
+            request_headers: {}
+            request_body_data:
+              scope: https://graph.microsoft.com/.default
+              client_id: '{{ config[''client_id''] }}'
+              grant_type: client_credentials
+              client_secret: '{{ config[''client_secret''] }}'
+            request_parameters: {}
+          session_token_path:
+            - access_token
+          expiration_duration: PT1H
+          request_authentication:
+            type: Bearer
+        request_headers: {}
+        request_body_json: {}
+        request_parameters:
+          $format: application/json
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - value
+      partition_router: []
+    primary_key:
+      - unique
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          unique:
+            type: string
+          isDeleted:
+            type: boolean
+          readCount:
+            type: number
+          sendCount:
+            type: number
+          displayName:
+            type: string
+          receiveCount:
+            type: number
+          reportPeriod:
+            type: string
+          assignedProducts:
+            type: array
+            items:
+              type: string
+          lastActivityDate:
+            type:
+              - 'null'
+              - string
+          reportRefreshDate:
+            type: string
+          userPrincipalName:
+            type: string
+          meetingCreatedCount:
+            type: number
+          meetingInteractedCount:
+            type: number
+    transformations:
+      - type: AddFields
+        fields:
+          - path:
+              - unique
+            value: >-
+              {{ record['userPrincipalName'] }}-{{ record['reportRefreshDate']
+              }}
+            type: AddedFieldDefinition
+    incremental_sync:
+      step: P1D
+      type: DatetimeBasedCursor
+      cursor_field: reportRefreshDate
+      end_datetime:
+        type: MinMaxDatetime
+        datetime: '{{ day_delta(-3, format=''%Y-%m-%d'') }}'
+        datetime_format: '%Y-%m-%d'
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: '2026-02-02'
+        datetime_format: '%Y-%m-%d'
+      datetime_format: '%Y-%m-%d'
+      cursor_granularity: P1D
+      cursor_datetime_formats:
+        - '%Y-%m-%d'
+  - name: teams_activity
+    type: DeclarativeStream
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: DefaultPaginator
+        page_token_option:
+          type: RequestOption
+          field_name: skiptoken
+          inject_into: request_parameter
+        pagination_strategy:
+          type: CursorPagination
+          cursor_value: >-
+            {{ response['@odata.nextLink'].split('$skiptoken=')[1] if
+            response['@odata.nextLink'] is defined else None }}
+          stop_condition: '{{ response[''@odata.nextLink''] is not defined }}'
+      requester:
+        path: >-
+          /beta/reports/getTeamsUserActivityUserDetail(date={{
+          stream_interval.start_time[:10] }})
+        type: HttpRequester
+        url_base: https://graph.microsoft.com/
+        http_method: GET
+        authenticator:
+          type: SessionTokenAuthenticator
+          login_requester:
+            path: token
+            type: HttpRequester
+            url_base: >-
+              https://login.microsoftonline.com/{{ config['tenant_id']
+              }}/oauth2/v2.0
+            http_method: POST
+            authenticator:
+              type: NoAuth
+            request_headers: {}
+            request_body_data:
+              scope: https://graph.microsoft.com/.default
+              client_id: '{{ config[''client_id''] }}'
+              grant_type: client_credentials
+              client_secret: '{{ config[''client_secret''] }}'
+            request_parameters: {}
+          session_token_path:
+            - access_token
+          expiration_duration: PT1H
+          request_authentication:
+            type: Bearer
+        request_headers: {}
+        request_body_json: {}
+        request_parameters:
+          $format: application/json
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - value
+      partition_router: []
+    primary_key:
+      - unique
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          unique:
+            type: string
+          userId:
+            type: string
+          callCount:
+            type: number
+          isDeleted:
+            type: boolean
+          isExternal:
+            type: boolean
+          isLicensed:
+            type: boolean
+          meetingCount:
+            type: number
+          postMessages:
+            type: number
+          reportPeriod:
+            type: string
+          audioDuration:
+            type: string
+          replyMessages:
+            type: number
+          videoDuration:
+            type: string
+          hasOtherAction:
+            type: boolean
+          urgentMessages:
+            type: number
+          assignedProducts:
+            type: array
+            items:
+              type: string
+          lastActivityDate:
+            type: string
+          reportRefreshDate:
+            type: string
+          tenantDisplayName:
+            type: string
+          userPrincipalName:
+            type: string
+          screenShareDuration:
+            type: string
+          teamChatMessageCount:
+            type: number
+          meetingsAttendedCount:
+            type: number
+          meetingsOrganizedCount:
+            type: number
+          privateChatMessageCount:
+            type: number
+          adHocMeetingsAttendedCount:
+            type: number
+          adHocMeetingsOrganizedCount:
+            type: number
+          sharedChannelTenantDisplayNames:
+            type: string
+          scheduledOneTimeMeetingsAttendedCount:
+            type: number
+          scheduledOneTimeMeetingsOrganizedCount:
+            type: number
+          scheduledRecurringMeetingsAttendedCount:
+            type: number
+          scheduledRecurringMeetingsOrganizedCount:
+            type: number
+    transformations:
+      - type: AddFields
+        fields:
+          - path:
+              - unique
+            value: >-
+              {{ record['userPrincipalName'] }}-{{ record['reportRefreshDate']
+              }}
+            type: AddedFieldDefinition
+    incremental_sync:
+      step: P1D
+      type: DatetimeBasedCursor
+      cursor_field: reportRefreshDate
+      end_datetime:
+        type: MinMaxDatetime
+        datetime: '{{ day_delta(-3, format=''%Y-%m-%d'') }}'
+        datetime_format: '%Y-%m-%d'
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: '2026-01-02'
+        datetime_format: '%Y-%m-%d'
+      datetime_format: '%Y-%m-%d'
+      cursor_granularity: P1D
+      cursor_datetime_formats:
+        - '%Y-%m-%d'
+  - name: onedrive_activity
+    type: DeclarativeStream
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: DefaultPaginator
+        page_token_option:
+          type: RequestOption
+          field_name: skiptoken
+          inject_into: request_parameter
+        pagination_strategy:
+          type: CursorPagination
+          cursor_value: >-
+            {{ response['@odata.nextLink'].split('$skiptoken=')[1] if
+            response['@odata.nextLink'] is defined else None }}
+          stop_condition: '{{ response[''@odata.nextLink''] is not defined }}'
+      requester:
+        path: >-
+          /beta/reports/getOneDriveActivityUserDetail(date={{
+          stream_interval.start_time[:10] }})
+        type: HttpRequester
+        url_base: https://graph.microsoft.com/
+        http_method: GET
+        authenticator:
+          type: SessionTokenAuthenticator
+          login_requester:
+            path: token
+            type: HttpRequester
+            url_base: >-
+              https://login.microsoftonline.com/{{ config['tenant_id']
+              }}/oauth2/v2.0
+            http_method: POST
+            authenticator:
+              type: NoAuth
+            request_headers: {}
+            request_body_data:
+              scope: https://graph.microsoft.com/.default
+              client_id: '{{ config[''client_id''] }}'
+              grant_type: client_credentials
+              client_secret: '{{ config[''client_secret''] }}'
+            request_parameters: {}
+          session_token_path:
+            - access_token
+          expiration_duration: PT1H
+          request_authentication:
+            type: Bearer
+        request_headers: {}
+        request_body_json: {}
+        request_parameters:
+          $format: application/json
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - value
+      partition_router: []
+    primary_key:
+      - unique
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          unique:
+            type: string
+          isDeleted:
+            type: boolean
+          reportPeriod:
+            type: string
+          syncedFileCount:
+            type: number
+          assignedProducts:
+            type: array
+            items:
+              type: string
+          lastActivityDate:
+            type: string
+          reportRefreshDate:
+            type: string
+          userPrincipalName:
+            type: string
+          viewedOrEditedFileCount:
+            type: number
+          sharedExternallyFileCount:
+            type: number
+          sharedInternallyFileCount:
+            type: number
+    transformations:
+      - type: AddFields
+        fields:
+          - path:
+              - unique
+            value: >-
+              {{ record['userPrincipalName'] }}-{{ record['reportRefreshDate']
+              }}
+            type: AddedFieldDefinition
+    incremental_sync:
+      step: P1D
+      type: DatetimeBasedCursor
+      cursor_field: reportRefreshDate
+      end_datetime:
+        type: MinMaxDatetime
+        datetime: '{{ day_delta(-3, format=''%Y-%m-%d'') }}'
+        datetime_format: '%Y-%m-%d'
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: '2026-01-02'
+        datetime_format: '%Y-%m-%d'
+      datetime_format: '%Y-%m-%d'
+      cursor_granularity: P1D
+      cursor_datetime_formats:
+        - '%Y-%m-%d'
+  - name: sharepoint_activity
+    type: DeclarativeStream
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: DefaultPaginator
+        page_token_option:
+          type: RequestOption
+          field_name: skiptoken
+          inject_into: request_parameter
+        pagination_strategy:
+          type: CursorPagination
+          cursor_value: >-
+            {{ response['@odata.nextLink'].split('$skiptoken=')[1] if
+            response['@odata.nextLink'] is defined else None }}
+          stop_condition: '{{ response[''@odata.nextLink''] is not defined }}'
+      requester:
+        path: >-
+          /beta/reports/getSharePointActivityUserDetail(date={{
+          stream_interval.start_time[:10] }})
+        type: HttpRequester
+        url_base: https://graph.microsoft.com/
+        http_method: GET
+        authenticator:
+          type: SessionTokenAuthenticator
+          login_requester:
+            path: token
+            type: HttpRequester
+            url_base: >-
+              https://login.microsoftonline.com/{{ config['tenant_id']
+              }}/oauth2/v2.0
+            http_method: POST
+            authenticator:
+              type: NoAuth
+            request_headers: {}
+            request_body_data:
+              scope: https://graph.microsoft.com/.default
+              client_id: '{{ config[''client_id''] }}'
+              grant_type: client_credentials
+              client_secret: '{{ config[''client_secret''] }}'
+            request_parameters: {}
+          session_token_path:
+            - access_token
+          expiration_duration: PT1H
+          request_authentication:
+            type: Bearer
+        request_headers: {}
+        request_body_json: {}
+        request_parameters:
+          $format: application/json
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - value
+      partition_router: []
+    primary_key:
+      - unique
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          unique:
+            type: string
+          isDeleted:
+            type: boolean
+          reportPeriod:
+            type: string
+          syncedFileCount:
+            type: number
+          assignedProducts:
+            type: array
+            items:
+              type: string
+          lastActivityDate:
+            type: string
+          visitedPageCount:
+            type: number
+          reportRefreshDate:
+            type: string
+          userPrincipalName:
+            type: string
+          viewedOrEditedFileCount:
+            type: number
+          sharedExternallyFileCount:
+            type: number
+          sharedInternallyFileCount:
+            type: number
+    transformations:
+      - type: AddFields
+        fields:
+          - path:
+              - unique
+            value: >-
+              {{ record['userPrincipalName'] }}-{{ record['reportRefreshDate']
+              }}
+            type: AddedFieldDefinition
+    incremental_sync:
+      step: P1D
+      type: DatetimeBasedCursor
+      cursor_field: reportRefreshDate
+      end_datetime:
+        type: MinMaxDatetime
+        datetime: '{{ day_delta(-3, format=''%Y-%m-%d'') }}'
+        datetime_format: '%Y-%m-%d'
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: '2026-01-02'
+        datetime_format: '%Y-%m-%d'
+      datetime_format: '%Y-%m-%d'
+      cursor_granularity: P1D
+      cursor_datetime_formats:
+        - '%Y-%m-%d'
+version: 0.57.0
+metadata:
+  autoImportSchema:
+    email_activity: true
+    teams_activity: true
+    onedrive_activity: true
+    sharepoint_activity: true

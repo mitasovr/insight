@@ -1,0 +1,21 @@
+Project communications_source_class {
+  database_type: "PostgreSQL"
+  Note: "Table for communications source class"
+}
+
+Table class_communications {
+  id int [pk, not null, increment]
+  ingestion_at timestamp [not null, note: "Ingestion date"]
+  user_id text [note: "TBD"]
+
+  reporting_date date [not null, note: "Reporting date"]
+  source text [not null, note: "Constant source marker, expected values: ms365, zulip"]
+  emails_send numeric [not null, note: "Count of sent emails by day"]
+  messages_send numeric [not null, note: "Count of sent chat messages by day"]
+  metadata jsonb [not null, note: "Metadata"]
+
+  indexes {
+    ingestion_at [name: "idx_class_communications_ingestion_at"]
+    (reporting_date, source) [unique, name: "uq_class_communications_reporting_date_source"]
+  }
+}

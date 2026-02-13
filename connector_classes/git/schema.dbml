@@ -1,0 +1,28 @@
+Project git_source_class {
+  database_type: "PostgreSQL"
+  Note: "Table for git source class"
+}
+
+Table commits {
+  id int [pk, not null, increment]
+  ingestion_at timestamp [not null, note: "Ingestion date"]
+  user_id text [note: "TBD"]
+
+  hash text [not null, note: "Commit hash"]
+  created_at timestamp [not null, note: "Commit creation datetime"]
+  message text [not null, note: "Commit message"]
+  lines_added numeric [not null, note: "Added lines count"]
+  lines_deleted numeric [not null, note: "Deleted lines count"]
+  repo_id text [not null, note: "Repository id in source system"]
+  source text [not null, note: "Expected values: gitlab, github, bitbucket"]
+
+  indexes {
+    hash [name: "idx_commits_hash"]
+    ingestion_at [name: "idx_commits_ingestion_at"]
+    created_at [name: "idx_commits_created_at"]
+    repo_id [name: "idx_commits_repo_id"]
+    source [name: "idx_commits_source"]
+    (source, repo_id, created_at) [name: "idx_commits_source_repo_created_at"]
+    (source, repo_id, hash) [unique, name: "uq_commits_source_repo_hash"]
+  }
+}

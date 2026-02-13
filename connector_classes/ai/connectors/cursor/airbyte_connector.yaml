@@ -1,0 +1,237 @@
+spec:
+  type: Spec
+  connection_specification:
+    type: object
+    $schema: http://json-schema.org/draft-07/schema#
+    required:
+      - api_key
+    properties:
+      api_key:
+        type: string
+        order: 0
+        title: API Key
+        airbyte_secret: true
+    additionalProperties: true
+type: DeclarativeSource
+check:
+  type: CheckStream
+  stream_names:
+    - events
+streams:
+  - name: events
+    type: DeclarativeStream
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: DefaultPaginator
+        page_size_option:
+          type: RequestOption
+          field_name: pageSize
+          inject_into: body_json
+        page_token_option:
+          type: RequestOption
+          field_name: page
+          inject_into: body_json
+        pagination_strategy:
+          type: PageIncrement
+          page_size: 1000
+          start_from_page: 1
+      requester:
+        path: /teams/filtered-usage-events
+        type: HttpRequester
+        url_base: https://api.cursor.com
+        http_method: POST
+        authenticator:
+          type: BearerAuthenticator
+          api_token: '{{ config[''api_key''] }}'
+        request_headers:
+          Content-Type: application/json
+        request_body_json:
+          date: date
+        request_parameters: {}
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - usageEvents
+      partition_router: []
+    primary_key:
+      - unique
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          kind:
+            type: string
+          model:
+            type: string
+          unique:
+            type: string
+          maxMode:
+            type: boolean
+          timestamp:
+            type: string
+          userEmail:
+            type: string
+          isHeadless:
+            type: boolean
+          tokenUsage:
+            type: object
+            properties:
+              totalCents:
+                type: number
+              inputTokens:
+                type: number
+              outputTokens:
+                type: number
+              cacheReadTokens:
+                type: number
+              cacheWriteTokens:
+                type: number
+              discountPercentOff:
+                type: number
+          isChargeable:
+            type: boolean
+          requestsCosts:
+            type: number
+          cursorTokenFee:
+            type: number
+          isTokenBasedCall:
+            type: boolean
+    transformations:
+      - type: AddFields
+        fields:
+          - path:
+              - unique
+            value: '{{ record[''userEmail''] }}{{ record[''timestamp''] }}'
+            type: AddedFieldDefinition
+    incremental_sync:
+      type: DatetimeBasedCursor
+      cursor_field: timestamp
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: '2025-07-01'
+        datetime_format: '%Y-%m-%d'
+      datetime_format: '%Y-%m-%dT%H:%M:%S.%f%z'
+      start_time_option:
+        type: RequestOption
+        field_name: startDate
+        inject_into: body_json
+      cursor_datetime_formats:
+        - '%ms'
+  - name: daily-usage
+    type: DeclarativeStream
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: NoPagination
+      requester:
+        path: /teams/daily-usage-data
+        type: HttpRequester
+        url_base: https://api.cursor.com
+        http_method: POST
+        authenticator:
+          type: BearerAuthenticator
+          api_token: '{{ config[''api_key''] }}'
+        request_headers:
+          Content-Type: application/json
+        request_body_json: {}
+        request_parameters: {}
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - data
+      partition_router: []
+    primary_key:
+      - unique
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          day:
+            type: string
+          date:
+            type: number
+          email:
+            type: string
+          unique:
+            type: string
+          userId:
+            type: string
+          isActive:
+            type: boolean
+          apiKeyReqs:
+            type: number
+          cmdkUsages:
+            type: number
+          bugbotUsages:
+            type: number
+          chatRequests:
+            type: number
+          totalAccepts:
+            type: number
+          totalApplies:
+            type: number
+          totalRejects:
+            type: number
+          agentRequests:
+            type: number
+          clientVersion:
+            type: string
+          mostUsedModel:
+            type: string
+          totalTabsShown:
+            type: number
+          usageBasedReqs:
+            type: number
+          totalLinesAdded:
+            type: number
+          composerRequests:
+            type: number
+          totalLinesDeleted:
+            type: number
+          totalTabsAccepted:
+            type: number
+          acceptedLinesAdded:
+            type: number
+          acceptedLinesDeleted:
+            type: number
+          tabMostUsedExtension:
+            type: string
+          applyMostUsedExtension:
+            type: string
+          subscriptionIncludedReqs:
+            type: number
+    transformations:
+      - type: AddFields
+        fields:
+          - path:
+              - unique
+            value: '{{ record[''email''] }}{{ record[''date''] }}'
+            type: AddedFieldDefinition
+    incremental_sync:
+      type: DatetimeBasedCursor
+      cursor_field: date
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: '2025-12-01'
+        datetime_format: '%Y-%m-%d'
+      datetime_format: '%ms'
+      start_time_option:
+        type: RequestOption
+        field_name: startDate
+        inject_into: body_json
+      cursor_datetime_formats:
+        - '%ms'
+version: 0.57.0
+metadata:
+  autoImportSchema:
+    events: true
+    daily-usage: true

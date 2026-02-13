@@ -1,0 +1,142 @@
+spec:
+  type: Spec
+  connection_specification:
+    type: object
+    $schema: http://json-schema.org/draft-07/schema#
+    required:
+      - api_key
+    properties:
+      api_key:
+        type: string
+        order: 0
+        title: API Key
+        airbyte_secret: true
+    additionalProperties: true
+type: DeclarativeSource
+check:
+  type: CheckStream
+  stream_names:
+    - users
+streams:
+  - name: users
+    type: DeclarativeStream
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: DefaultPaginator
+        page_size_option:
+          type: RequestOption
+          field_name: limit
+          inject_into: request_parameter
+        page_token_option:
+          type: RequestOption
+          field_name: offset
+          inject_into: request_parameter
+        pagination_strategy:
+          type: OffsetIncrement
+          page_size: 100
+      requester:
+        path: users
+        type: HttpRequester
+        url_base: http://172.16.18.33:9999/api
+        http_method: GET
+        authenticator:
+          type: BearerAuthenticator
+          api_token: '{{ config[''api_key''] }}'
+        request_headers: {}
+        request_body_json: {}
+        request_parameters: {}
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - users
+      partition_router: []
+    primary_key:
+      - id
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          id:
+            type: number
+          role:
+            type: number
+          uuid:
+            type: string
+          email:
+            type: string
+          full_name:
+            type: string
+          is_active:
+            type: boolean
+          recipient_id:
+            type: number
+  - name: messages
+    type: DeclarativeStream
+    retriever:
+      type: SimpleRetriever
+      paginator:
+        type: DefaultPaginator
+        page_token_option:
+          type: RequestOption
+          field_name: cursor
+          inject_into: request_parameter
+        pagination_strategy:
+          type: CursorPagination
+          cursor_value: '{{ response.get("nextCursor", {}) }}'
+          stop_condition: '{{ not response.get("nextCursor", {}) }}'
+      requester:
+        path: messages
+        type: HttpRequester
+        url_base: http://172.16.18.33:9999/api
+        http_method: GET
+        authenticator:
+          type: BearerAuthenticator
+          api_token: '{{ config[''api_key''] }}'
+        request_headers: {}
+        request_body_json: {}
+        request_parameters:
+          throttle: '5000'
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - messages
+      partition_router: []
+    primary_key:
+      - uniq
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          uniq:
+            type: string
+          count:
+            type: number
+          sender_id:
+            type: number
+          created_at:
+            type: string
+    incremental_sync:
+      type: DatetimeBasedCursor
+      cursor_field: created_at
+      is_data_feed: true
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: '2024-01-01'
+        datetime_format: '%Y-%m-%d'
+      datetime_format: '%Y-%m-%dT%H:%M:%S.%f%z'
+      cursor_datetime_formats:
+        - '%Y-%m-%dT%H:%M:%S.%fZ'
+version: 0.57.0
+metadata:
+  autoImportSchema:
+    users: true
+    messages: true

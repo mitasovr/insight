@@ -1,0 +1,157 @@
+Project raw_cursor_schema {
+  database_type: 'PostgreSQL'
+  Note: 'Airbyte tables for Cursor connector in _raw_cursor schema'
+}
+
+Table _raw_cursor._airbyte_raw_daily_usage {
+  _airbyte_ab_id varchar [pk, not null]
+  _airbyte_data jsonb
+  _airbyte_emitted_at timestamp [default: `CURRENT_TIMESTAMP`]
+}
+
+Table _raw_cursor._airbyte_raw_events {
+  _airbyte_ab_id varchar [pk, not null]
+  _airbyte_data jsonb
+  _airbyte_emitted_at timestamp [default: `CURRENT_TIMESTAMP`]
+}
+
+Table _raw_cursor.daily_usage {
+  _airbyte_unique_key text [unique]
+  date double
+  email text
+  "unique" text
+  userid text
+  isactive boolean
+  apikeyreqs double
+  cmdkusages double
+  bugbotusages double
+  chatrequests double
+  totalaccepts double
+  totalapplies double
+  totalrejects double
+  agentrequests double
+  clientversion text
+  mostusedmodel text
+  totaltabsshown double
+  usagebasedreqs double
+  totallinesadded double
+  composerrequests double
+  totallinesdeleted double
+  totaltabsaccepted double
+  acceptedlinesadded double
+  acceptedlinesdeleted double
+  tabmostusedextension text
+  applymostusedextension text
+  subscriptionincludedreqs double
+  _airbyte_ab_id varchar
+  _airbyte_emitted_at timestamp
+  _airbyte_normalized_at timestamp
+  _airbyte_daily_usage_hashid text
+  day text
+}
+
+Table _raw_cursor.daily_usage_scd {
+  _airbyte_unique_key text
+  _airbyte_unique_key_scd text
+  date double
+  email text
+  "unique" text
+  userid text
+  isactive boolean
+  apikeyreqs double
+  cmdkusages double
+  bugbotusages double
+  chatrequests double
+  totalaccepts double
+  totalapplies double
+  totalrejects double
+  agentrequests double
+  clientversion text
+  mostusedmodel text
+  totaltabsshown double
+  usagebasedreqs double
+  totallinesadded double
+  composerrequests double
+  totallinesdeleted double
+  totaltabsaccepted double
+  acceptedlinesadded double
+  acceptedlinesdeleted double
+  tabmostusedextension text
+  applymostusedextension text
+  subscriptionincludedreqs double
+  _airbyte_start_at double
+  _airbyte_end_at double
+  _airbyte_active_row int
+  _airbyte_ab_id varchar
+  _airbyte_emitted_at timestamp
+  _airbyte_normalized_at timestamp
+  _airbyte_daily_usage_hashid text
+  day text
+
+  indexes {
+    (_airbyte_active_row, _airbyte_unique_key_scd, _airbyte_emitted_at)
+  }
+}
+
+Table _raw_cursor.events {
+  _airbyte_unique_key text [unique]
+  kind text
+  model text
+  "unique" text
+  maxmode boolean
+  "timestamp" text
+  useremail text
+  requestscosts double
+  istokenbasedcall boolean
+  _airbyte_ab_id varchar
+  _airbyte_emitted_at timestamp
+  _airbyte_normalized_at timestamp
+  _airbyte_events_hashid text
+  tokenusage jsonb
+  ischargeable boolean
+  cursortokenfee double
+}
+
+Table _raw_cursor.events_scd {
+  _airbyte_unique_key text
+  _airbyte_unique_key_scd text
+  kind text
+  model text
+  "unique" text
+  maxmode boolean
+  "timestamp" text
+  useremail text
+  requestscosts double
+  istokenbasedcall boolean
+  _airbyte_start_at text
+  _airbyte_end_at text
+  _airbyte_active_row int
+  _airbyte_ab_id varchar
+  _airbyte_emitted_at timestamp
+  _airbyte_normalized_at timestamp
+  _airbyte_events_hashid text
+  tokenusage jsonb
+  ischargeable boolean
+  cursortokenfee double
+
+  indexes {
+    (_airbyte_active_row, _airbyte_unique_key_scd, _airbyte_emitted_at)
+  }
+}
+
+Table _raw_cursor.events_tokenusage {
+  _airbyte_events_hashid text
+  totalcents double
+  inputtokens double
+  outputtokens double
+  cachereadtokens double
+  cachewritetokens double
+  _airbyte_ab_id varchar
+  _airbyte_emitted_at timestamp
+  _airbyte_normalized_at timestamp
+  _airbyte_tokenusage_hashid text
+
+  indexes {
+    _airbyte_emitted_at
+  }
+}

@@ -1,0 +1,39 @@
+Project task_tracker_source_class {
+  database_type: "PostgreSQL"
+  Note: "Table for task tracker source class"
+}
+
+Table class_task_tracker {
+  id int [pk, not null, increment]
+  ingestion_at timestamp [not null, note: "Ingestion date"]
+  deleted boolean [not null, note: "Record deletion flag"]
+  
+  task_id text [not null, note: "Human-readable task identifier"]
+  task_id_ref text [not null, note: "Task identifier in source tracker system"]
+  source text [not null, note: "Constant source marker, expected values: youtrack, jira"]
+  metadata jsonb [not null, note: "Free-form metadata"]
+
+  created_at timestamp [not null, note: "Task creation datetime"]
+  created_by_name text [not null, note: "Task creator name"]
+  created_by_id text [not null, note: "Task creator identifier in tracker"]
+
+  started_at timestamp [note: "Task start datetime"]
+  started_by_name text [note: "Task starter name"]
+  started_by_id text [note: "Task starter identifier in tracker"]
+
+  testing_started_at timestamp [note: "Testing start datetime"]
+  testing_started_by_name text [note: "Testing starter name"]
+  testing_started_by_id text [note: "Testing starter identifier in tracker"]
+
+  done_at timestamp [note: "Task completion datetime"]
+  done_by_name text [note: "Task completer name"]
+  done_by_id text [note: "Task completer identifier in tracker"]
+
+  indexes {
+    ingestion_at [name: "idx_class_task_tracker_ingestion_at"]
+    task_id [name: "idx_class_task_tracker_task_id"]
+    task_id_ref [name: "idx_class_task_tracker_task_id_ref"]
+    (source, task_id_ref) [name: "idx_class_task_tracker_source_task_id_ref"]
+    (source, task_id_ref, deleted) [unique, name: "uq_class_task_tracker_source_task_id_ref_deleted"]
+  }
+}

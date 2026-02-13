@@ -1,0 +1,44 @@
+Table public.youtrack_issue {
+  id int [pk, not null, increment]
+  youtrack_id text [not null, unique]
+  id_readable text [not null, unique]
+  created timestamp [not null]
+  updated timestamp [not null]
+
+  indexes {
+    id_readable [name: "youtrack_issue_idx_id_readable"]
+    youtrack_id [name: "youtrack_issue_idx_youtrack_id"]
+  }
+}
+
+Table public.youtrack_issue_history {
+  id int [pk, not null, increment]
+  id_readable varchar [not null]
+  issue_youtrack_id varchar [not null]
+  author_youtrack_id varchar [not null]
+  index int [not null]
+  activity_id varchar [not null]
+  created_at timestamptz [not null]
+  field_id varchar [not null]
+  field_name varchar [not null]
+  value jsonb
+  value_id varchar [not null, unique]
+
+  indexes {
+    activity_id [name: "idx_youtrack_issue_history_activity_id"]
+    created_at [name: "idx_youtrack_issue_history_created_at"]
+    field_name [name: "idx_youtrack_issue_history_field_name"]
+    id_readable [name: "idx_youtrack_issue_history_id_readable"]
+    (issue_youtrack_id, field_name) [name: "idx_youtrack_issue_history_issue_field"]
+    (issue_youtrack_id, field_name, created_at) [name: "idx_youtrack_issue_history_issue_field_created"]
+    issue_youtrack_id [name: "idx_youtrack_issue_history_issue_youtrack_id"]
+  }
+}
+
+Table public.youtrack_user {
+  id int [pk, not null, increment]
+  youtrack_id varchar [not null, unique]
+  email varchar [unique]
+  full_name varchar [not null]
+  username varchar [not null, unique]
+}

@@ -1,0 +1,34 @@
+Project raw_zulip_schema {
+  database_type: 'ClickHouse'
+  Note: 'Airbyte normalized tables for Zulip connector in _raw_zulip schema'
+}
+
+Table _raw_zulip.messages {
+  _airbyte_unique_key text
+  uniq text [note: 'Nullable(String)']
+  count double [note: 'Nullable(Float64)']
+  sender_id double [note: 'Nullable(Float64)']
+  created_at text [note: 'Nullable(String)']
+  _airbyte_ab_id text [not null]
+  _airbyte_emitted_at datetime [note: "DateTime64(3, 'GMT')"]
+  _airbyte_normalized_at datetime
+  _airbyte_messages_hashid text [not null]
+
+  Note: 'Engine: MergeTree; ORDER BY tuple(); SETTINGS index_granularity = 8192'
+}
+
+Table _raw_zulip.users {
+  id double [note: 'Nullable(Float64)']
+  role double [note: 'Nullable(Float64)']
+  uuid text [note: 'Nullable(String)']
+  email text [note: 'Nullable(String)']
+  full_name text [note: 'Nullable(String)']
+  is_active int [not null, note: 'UInt8']
+  recipient_id double [note: 'Nullable(Float64)']
+  _airbyte_ab_id text [not null]
+  _airbyte_emitted_at datetime [note: "DateTime64(3, 'GMT')"]
+  _airbyte_normalized_at datetime
+  _airbyte_users_hashid text [not null]
+
+  Note: 'Engine: MergeTree; ORDER BY tuple(); SETTINGS index_granularity = 8192'
+}

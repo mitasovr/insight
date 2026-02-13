@@ -1,0 +1,65 @@
+Table public.cursor_events {
+  unique text [pk, not null]
+  kind text [not null]
+  model text [not null]
+  maxMode boolean [not null]
+  timestamp timestamptz [not null]
+  userEmail text [not null]
+  isHeadless boolean [not null]
+  isChargeable boolean [not null]
+  requestsCosts numeric [not null]
+  cursorTokenFee numeric [not null]
+  isTokenBasedCall boolean [not null]
+
+  indexes {
+    timestamp [name: "idx_cursor_events_timestamp"]
+    userEmail [name: "idx_cursor_events_user_email"]
+  }
+}
+
+Table public.cursor_events_token_usage {
+  event_unique text [pk, not null, note: "Reference to cursor_events.unique"]
+  totalCents numeric
+  inputTokens numeric
+  outputTokens numeric
+  cacheReadTokens numeric
+  cacheWriteTokens numeric
+  discountPercentOff numeric
+}
+
+Table public.cursor_daily_usage {
+  unique text [pk, not null]
+  day text [not null]
+  date bigint [not null, note: "Unix timestamp in milliseconds"]
+  email text [not null]
+  userId text [not null]
+  isActive boolean [not null]
+  apiKeyReqs numeric [not null]
+  cmdkUsages numeric [not null]
+  bugbotUsages numeric [not null]
+  chatRequests numeric [not null]
+  totalAccepts numeric [not null]
+  totalApplies numeric [not null]
+  totalRejects numeric [not null]
+  agentRequests numeric [not null]
+  clientVersion text [not null]
+  mostUsedModel text [not null]
+  totalTabsShown numeric [not null]
+  usageBasedReqs numeric [not null]
+  totalLinesAdded numeric [not null]
+  composerRequests numeric [not null]
+  totalLinesDeleted numeric [not null]
+  totalTabsAccepted numeric [not null]
+  acceptedLinesAdded numeric [not null]
+  acceptedLinesDeleted numeric [not null]
+  tabMostUsedExtension text [not null]
+  applyMostUsedExtension text [not null]
+  subscriptionIncludedReqs numeric [not null]
+
+  indexes {
+    date [name: "idx_cursor_daily_usage_date"]
+    email [name: "idx_cursor_daily_usage_email"]
+  }
+}
+
+Ref: public.cursor_events_token_usage.event_unique > public.cursor_events.unique
