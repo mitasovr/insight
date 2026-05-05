@@ -23,7 +23,7 @@
       "github_token": {
         "type": "string",
         "title": "GitHub Personal Access Token",
-        "description": "Classic Personal Access Token with 'manage_billing:copilot' AND 'read:org' scopes. Both scopes are required: 'manage_billing:copilot' for the seats endpoint; 'read:org' for the metrics reports endpoints. Must be created by an Organization Owner. Fine-grained PATs do not support these scopes.",
+        "description": "Classic Personal Access Token with 'manage_billing:copilot' scope (required for the seats endpoint). Either 'manage_billing:copilot' or 'read:org' is sufficient for the metrics reports endpoints. Must be created by an Organization Owner. Fine-grained PATs do not support these scopes. The 'Copilot usage metrics' policy must be enabled under Organization Settings → Copilot → Policies, otherwise metrics endpoints return HTTP 403.",
         "airbyte_secret": true,
         "order": 2
       },

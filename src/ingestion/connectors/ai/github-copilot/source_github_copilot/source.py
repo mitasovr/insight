@@ -46,9 +46,11 @@ class SourceGitHubCopilot(AbstractSource):
           1. insight_source_id is non-empty (per DESIGN §3.3 — composite unique_key
              collisions otherwise).
           2. PAT is valid against GitHub API (`/rate_limit` returns 200).
-          3. PAT can read the seats endpoint for the configured org (validates both
-             org existence and that the token has BOTH `manage_billing:copilot` and
-             `read:org` scopes).
+          3. PAT can read the seats endpoint for the configured org (validates org
+             existence and that the token has `manage_billing:copilot` scope).
+          4. Metrics reports endpoint is accessible (validates that the "Copilot usage
+             metrics" policy is enabled in org settings — 403 here means the policy is
+             off, not a missing scope).
         """
         insight_source_id = (config.get("insight_source_id") or "").strip()
         if not insight_source_id:
@@ -72,8 +74,7 @@ class SourceGitHubCopilot(AbstractSource):
             if resp.status_code == 401:
                 return False, (
                     "GitHub PAT is invalid or expired (HTTP 401). "
-                    "Generate a new classic PAT with `manage_billing:copilot` and "
-                    "`read:org` scopes."
+                    "Generate a new classic PAT with `manage_billing:copilot` scope."
                 )
             if resp.status_code != 200:
                 return False, (
@@ -95,7 +96,7 @@ class SourceGitHubCopilot(AbstractSource):
             if resp.status_code == 403:
                 return False, (
                     f"Token lacks `manage_billing:copilot` scope (HTTP 403 on /copilot/billing/seats). "
-                    "Recreate PAT with both `manage_billing:copilot` AND `read:org` scopes and retry."
+                    "Recreate the PAT with `manage_billing:copilot` scope and retry."
                 )
             if resp.status_code != 200:
                 return False, (
@@ -103,11 +104,10 @@ class SourceGitHubCopilot(AbstractSource):
                     f"{resp.status_code}): {resp.text[:200]}"
                 )
 
-            # 3. Metrics reports endpoint access — validates read:org scope.
-            # Probe with a far-past date (returns HTTP 204 — that's fine for the
-            # scope check, since 204 means "auth OK, just no data for this day").
-            # 403 here = `read:org` missing (manage_billing:copilot alone is not
-            # sufficient for /copilot/metrics/reports/*).
+            # 4. Metrics reports endpoint access — validates that the "Copilot usage
+            # metrics" org policy is enabled. Probe with a far-past date (returns HTTP
+            # 204 when auth OK but no data; HTTP 403 when the policy is disabled).
+            # Either `manage_billing:copilot` or `read:org` scope is sufficient here.
             probe_date = "2024-01-01"  # well before the API's 2025-10-10 data start
             resp = requests.get(
                 f"https://api.github.com/orgs/{org}/copilot/metrics/reports/users-1-day",
@@ -117,10 +117,11 @@ class SourceGitHubCopilot(AbstractSource):
             )
             if resp.status_code == 403:
                 return False, (
-                    f"Token lacks `read:org` scope (HTTP 403 on /copilot/metrics/reports). "
-                    "The `manage_billing:copilot` scope is sufficient for the seats endpoint "
-                    "but the metrics reports endpoints additionally require `read:org`. "
-                    "Recreate PAT with both scopes and retry."
+                    f"Metrics reports endpoint returned HTTP 403 for org '{org}'. "
+                    "Most likely cause: the 'Copilot usage metrics' policy is disabled. "
+                    "Enable it under GitHub Organization Settings → Copilot → Policies → "
+                    "'Copilot usage metrics'. "
+                    f"API response: {resp.text[:200]}"
                 )
             if resp.status_code not in (200, 204, 404):
                 # 200/204 = OK; 404 sometimes returned for very old dates; anything else is wrong

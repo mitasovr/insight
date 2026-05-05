@@ -3,13 +3,11 @@
 Endpoint: GET /orgs/{org}/copilot/metrics/reports/organization-1-day?day=YYYY-MM-DD
 
 Same pattern as user_metrics but the NDJSON contains org-wide aggregates instead
-of per-user rows. Typical envelope returns 1 download_link, and each NDJSON file
-contains a single line with the org's daily totals.
+of per-user rows. Envelope returns 1 download_link (plain string URL), and each
+NDJSON file contains a single line with the org's daily totals.
 
-Field names are PROVISIONAL — the live reports API may use different naming
-conventions than what's in our spec. JSON Schema uses additionalProperties=true
-so unexpected fields pass through. Confirm exact field names against live API
-before activating the deferred Silver model `copilot__ai_org_usage`.
+Field set confirmed against live constructor-tech-org API (2026-04-29). JSON Schema
+uses additionalProperties=true so new API fields pass through without migration.
 
 Cursor advancement (Major #5 fix): same IncrementalMixin pattern as
 user_metrics — state advances per-slice so HTTP 204 days don't get re-fetched
@@ -141,8 +139,10 @@ class CopilotOrgMetricsStream(CopilotReportsStream, IncrementalMixin):
                 self._state = {self.cursor_field: slice_day}
 
     def get_json_schema(self) -> Mapping[str, Any]:
-        """JSON Schema for `bronze_github_copilot.copilot_org_metrics`. additionalProperties=true
-        because the live API field names are not yet confirmed (see DESIGN §3.7 provisional note)."""
+        """JSON Schema for `bronze_github_copilot.copilot_org_metrics`.
+
+        Field set confirmed against live constructor-tech-org API (2026-04-29).
+        """
         return {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "type": "object",
@@ -154,15 +154,35 @@ class CopilotOrgMetricsStream(CopilotReportsStream, IncrementalMixin):
                 "unique_key": {"type": "string"},
                 "data_source": {"type": "string"},
                 "collected_at": {"type": "string"},
-                # grain
+                # grain / identity
                 "day": {"type": "string"},
-                # provisional org-level fields
-                "total_code_acceptance_activity_count": {"type": ["null", "number"]},
-                "total_loc_added_sum": {"type": ["null", "number"]},
-                "total_active_user_count": {"type": ["null", "number"]},
-                "total_engaged_user_count": {"type": ["null", "number"]},
-                "total_used_chat_count": {"type": ["null", "number"]},
-                "total_used_agent_count": {"type": ["null", "number"]},
-                "total_used_cli_count": {"type": ["null", "number"]},
+                "organization_id": {"type": ["null", "string"]},
+                "enterprise_id": {"type": ["null", "string"]},
+                # active-user aggregates
+                "daily_active_users": {"type": ["null", "number"]},
+                "weekly_active_users": {"type": ["null", "number"]},
+                "monthly_active_users": {"type": ["null", "number"]},
+                "monthly_active_chat_users": {"type": ["null", "number"]},
+                "monthly_active_agent_users": {"type": ["null", "number"]},
+                "daily_active_copilot_cloud_agent_users": {"type": ["null", "number"]},
+                "weekly_active_copilot_cloud_agent_users": {"type": ["null", "number"]},
+                "monthly_active_copilot_cloud_agent_users": {"type": ["null", "number"]},
+                "daily_active_copilot_code_review_users": {"type": ["null", "number"]},
+                # interaction / code metrics
+                "user_initiated_interaction_count": {"type": ["null", "number"]},
+                "code_generation_activity_count": {"type": ["null", "number"]},
+                "code_acceptance_activity_count": {"type": ["null", "number"]},
+                "loc_suggested_to_add_sum": {"type": ["null", "number"]},
+                "loc_suggested_to_delete_sum": {"type": ["null", "number"]},
+                "loc_added_sum": {"type": ["null", "number"]},
+                "loc_deleted_sum": {"type": ["null", "number"]},
+                # pull-request metrics object
+                "pull_requests": {"type": ["null", "object"]},
+                # breakdown arrays (passthrough; schema varies by GitHub API version)
+                "totals_by_ide": {"type": ["null", "array"]},
+                "totals_by_feature": {"type": ["null", "array"]},
+                "totals_by_language_feature": {"type": ["null", "array"]},
+                "totals_by_language_model": {"type": ["null", "array"]},
+                "totals_by_model_feature": {"type": ["null", "array"]},
             },
         }

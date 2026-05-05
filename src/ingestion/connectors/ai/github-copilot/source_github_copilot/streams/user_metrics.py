@@ -2,7 +2,9 @@
 
 Endpoint: GET /orgs/{org}/copilot/metrics/reports/users-1-day?day=YYYY-MM-DD
 
-Step 1 returns: { "download_links": [{"url": "..."}, ...], "report_day": "YYYY-MM-DD" }
+Step 1 returns: { "download_links": ["https://..."], "report_day": "YYYY-MM-DD" }
+  NOTE: download_links is an array of plain strings (not {"url": "..."} objects).
+  base.py handles both formats.
 Step 2 (per signed URL): NDJSON, one JSON object per line — each = one user's day.
 
 Day boundaries:
@@ -159,7 +161,10 @@ class CopilotUserMetricsStream(CopilotReportsStream, IncrementalMixin):
                 self._state = {self.cursor_field: slice_day}
 
     def get_json_schema(self) -> Mapping[str, Any]:
-        """JSON Schema for `bronze_github_copilot.copilot_user_metrics`."""
+        """JSON Schema for `bronze_github_copilot.copilot_user_metrics`.
+
+        Field set confirmed against live constructor-tech-org API (2026-04-29).
+        """
         return {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "type": "object",
@@ -174,12 +179,29 @@ class CopilotUserMetricsStream(CopilotReportsStream, IncrementalMixin):
                 # grain / identity
                 "day": {"type": "string"},
                 "user_login": {"type": "string"},
-                # metrics
-                "loc_added_sum": {"type": ["null", "number"]},
+                "user_id": {"type": ["null", "number"]},
+                "organization_id": {"type": ["null", "string"]},
+                "enterprise_id": {"type": ["null", "string"]},
+                # code-generation metrics
+                "code_generation_activity_count": {"type": ["null", "number"]},
                 "code_acceptance_activity_count": {"type": ["null", "number"]},
+                "loc_suggested_to_add_sum": {"type": ["null", "number"]},
+                "loc_suggested_to_delete_sum": {"type": ["null", "number"]},
+                "loc_added_sum": {"type": ["null", "number"]},
+                "loc_deleted_sum": {"type": ["null", "number"]},
+                # interaction metrics
                 "user_initiated_interaction_count": {"type": ["null", "number"]},
+                # feature-usage flags
                 "used_chat": {"type": ["null", "boolean"]},
                 "used_agent": {"type": ["null", "boolean"]},
                 "used_cli": {"type": ["null", "boolean"]},
+                "used_copilot_coding_agent": {"type": ["null", "boolean"]},
+                "used_copilot_cloud_agent": {"type": ["null", "boolean"]},
+                # breakdown arrays (passthrough; schema varies by GitHub API version)
+                "totals_by_ide": {"type": ["null", "array"]},
+                "totals_by_feature": {"type": ["null", "array"]},
+                "totals_by_language_feature": {"type": ["null", "array"]},
+                "totals_by_language_model": {"type": ["null", "array"]},
+                "totals_by_model_feature": {"type": ["null", "array"]},
             },
         }

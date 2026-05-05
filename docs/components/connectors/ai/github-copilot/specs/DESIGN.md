@@ -154,7 +154,9 @@ The two-step signed URL pattern is encapsulated in a shared `_fetch_ndjson_recor
 
 - [ ] `p1` - **ID**: `cpt-insightspec-constraint-ghcopilot-pat-classic`
 
-Only a GitHub Personal Access Token (classic) with `manage_billing:copilot` **and `read:org`** scopes is supported. `manage_billing:copilot` is required for the seats endpoint (`/copilot/billing/seats`); `read:org` is additionally required for the metrics reports endpoints (`/copilot/metrics/reports/*`). Only Organization Owners can create such tokens. Fine-grained PATs do not support these scopes. The connector does not support GitHub App authentication for the Copilot Admin API.
+Only a GitHub Personal Access Token (classic) is supported. `manage_billing:copilot` scope is required for the seats endpoint (`/copilot/billing/seats`). Either `manage_billing:copilot` **or** `read:org` scope is sufficient for the metrics reports endpoints (`/copilot/metrics/reports/*`) — `manage_billing:copilot` is recommended as it covers all three endpoints with a single scope. Only Organization Owners can create such tokens. Fine-grained PATs do not support these scopes. The connector does not support GitHub App authentication for the Copilot Admin API.
+
+Additionally, the **"Copilot usage metrics"** policy must be enabled under the GitHub Organization Settings → Copilot → Policies. When the policy is disabled the metrics endpoints return HTTP 403; `check_connection()` detects this and surfaces an actionable error message.
 
 #### No Authorization Header on Signed-URL Download
 
@@ -328,7 +330,7 @@ Extracts per-user daily Copilot usage metrics — the primary input for `class_a
 ##### Responsibility scope
 
 - Step 1 endpoint: `GET https://api.github.com/orgs/{org}/copilot/metrics/reports/users-1-day?day={YYYY-MM-DD}` with Bearer auth.
-- Step 1 response: `{"download_links": [...], "report_day": "YYYY-MM-DD"}`.
+- Step 1 response: `{"download_links": ["https://..."], "report_day": "YYYY-MM-DD"}` — `download_links` is an array of plain URL strings (not `{"url": "..."}` objects).
 - Step 2: For each URL in `download_links`, `GET {signed_url}` via `download_headers()` (no auth header). Parse each line as a JSON object — one record per line.
 - Sync mode: Incremental; cursor field `day` (YYYY-MM-DD); advances from `max(day)` to yesterday UTC.
 - Injects framework fields and composite `unique_key` (`{tenant}-{source}-{user_login}-{day}` per ADR-0004) per record.
@@ -471,7 +473,7 @@ Config fields (defined in `spec.json`):
 | Field | Required | Secret | Description |
 |-------|----------|--------|-------------|
 | `tenant_id` | Yes | No | Tenant isolation identifier (UUID) |
-| `github_token` | Yes | Yes | PAT (classic) with `manage_billing:copilot` and `read:org` scopes |
+| `github_token` | Yes | Yes | PAT (classic) with `manage_billing:copilot` scope (covers all endpoints) |
 | `github_org` | Yes | No | GitHub organization slug (e.g. `my-company`) |
 | `insight_source_id` | **Yes** | No | Connector instance identifier — **must be non-empty** (validated by `check_connection()`); injected by the platform from the `insight.cyberfabric.com/source-id` annotation on the K8s Secret |
 | `github_start_date` | No | No | Earliest date for metrics backfill (YYYY-MM-DD). Default: 90 days ago |
@@ -632,13 +634,27 @@ Bronze tables are created by the destination (ClickHouse). In addition to connec
 | `insight_source_id` | String | Connector instance identifier — framework-injected, DEFAULT '' |
 | `unique_key` | String | Composite per ADR-0004: `concat(tenant_id, '-', insight_source_id, '-', user_login, '-', day)` |
 | `user_login` | String | GitHub username (source-native: API field `user_login`) — joins to `copilot_seats.user_login` for email resolution |
+| `user_id` | Number (nullable) | GitHub numeric user ID |
+| `organization_id` | String (nullable) | GitHub numeric org ID (as string) |
+| `enterprise_id` | String (nullable) | GitHub enterprise ID (empty string when not applicable) |
 | `day` | String | Metric date (YYYY-MM-DD) — incremental cursor |
-| `loc_added_sum` | Number (nullable) | Lines of code added via Copilot suggestions |
+| `code_generation_activity_count` | Number (nullable) | Code generation events triggered by the user |
 | `code_acceptance_activity_count` | Number (nullable) | Number of accepted code completion suggestions |
+| `loc_suggested_to_add_sum` | Number (nullable) | Lines of code suggested to add (pre-acceptance) |
+| `loc_suggested_to_delete_sum` | Number (nullable) | Lines of code suggested to delete (pre-acceptance) |
+| `loc_added_sum` | Number (nullable) | Lines of AI-generated code accepted and added |
+| `loc_deleted_sum` | Number (nullable) | Lines of AI-generated code accepted and deleted |
 | `user_initiated_interaction_count` | Number (nullable) | User-initiated interactions (chat turns, completions triggered) |
 | `used_chat` | Boolean (nullable) | Whether the user used Copilot Chat (IDE) on this day |
 | `used_agent` | Boolean (nullable) | Whether the user used agent mode on this day |
 | `used_cli` | Boolean (nullable) | Whether the user used Copilot CLI on this day |
+| `used_copilot_coding_agent` | Boolean (nullable) | Whether the user used Copilot Coding Agent on this day |
+| `used_copilot_cloud_agent` | Boolean (nullable) | Whether the user used Copilot Cloud Agent on this day |
+| `totals_by_ide` | Array (nullable) | Breakdown by IDE — passthrough JSON array |
+| `totals_by_feature` | Array (nullable) | Breakdown by Copilot feature — passthrough JSON array |
+| `totals_by_language_feature` | Array (nullable) | Breakdown by language × feature — passthrough JSON array |
+| `totals_by_language_model` | Array (nullable) | Breakdown by language × model — passthrough JSON array |
+| `totals_by_model_feature` | Array (nullable) | Breakdown by model × feature — passthrough JSON array |
 | `collected_at` | String | Collection timestamp (UTC ISO 8601) — framework-injected |
 | `data_source` | String | Always `insight_github_copilot` — framework-injected |
 
@@ -658,17 +674,34 @@ Bronze tables are created by the destination (ClickHouse). In addition to connec
 | `insight_source_id` | String | Connector instance identifier — framework-injected, **required non-empty** (validated by `check_connection()`) — discriminates between multiple Copilot connections per tenant |
 | `unique_key` | String | Composite per ADR-0004: `concat(tenant_id, '-', insight_source_id, '-', day)`. The `tenant-source-` prefix prevents collision between connections; multi-org tenants get distinct keys naturally |
 | `day` | String | Metric date (YYYY-MM-DD) — incremental cursor |
-| `total_code_acceptance_activity_count` | Number (nullable) | Total accepted code suggestions across all users — **provisional** |
-| `total_loc_added_sum` | Number (nullable) | Total lines of AI-generated code added across all users — **provisional** |
-| `total_active_user_count` | Number (nullable) | Users with at least one Copilot interaction on this day — **provisional** |
-| `total_engaged_user_count` | Number (nullable) | Users with substantive engagement (threshold defined by GitHub) — **provisional** |
-| `total_used_chat_count` | Number (nullable) | Users who used Copilot Chat on this day — **provisional** |
-| `total_used_agent_count` | Number (nullable) | Users who used agent mode on this day — **provisional** |
-| `total_used_cli_count` | Number (nullable) | Users who used Copilot CLI on this day — **provisional** |
+| `organization_id` | String (nullable) | GitHub numeric org ID (as string) |
+| `enterprise_id` | String (nullable) | GitHub enterprise ID (empty string when not applicable) |
+| `daily_active_users` | Number (nullable) | Users who triggered any Copilot event in the trailing 24 h |
+| `weekly_active_users` | Number (nullable) | Users active in the trailing 7 days |
+| `monthly_active_users` | Number (nullable) | Users active in the trailing 30 days |
+| `monthly_active_chat_users` | Number (nullable) | Users who used Copilot Chat in the trailing 30 days |
+| `monthly_active_agent_users` | Number (nullable) | Users who used agent mode in the trailing 30 days |
+| `daily_active_copilot_cloud_agent_users` | Number (nullable) | Users who used Copilot Cloud Agent in the trailing 24 h |
+| `weekly_active_copilot_cloud_agent_users` | Number (nullable) | Users active in Copilot Cloud Agent in the trailing 7 days |
+| `monthly_active_copilot_cloud_agent_users` | Number (nullable) | Users active in Copilot Cloud Agent in the trailing 30 days |
+| `daily_active_copilot_code_review_users` | Number (nullable) | Users who used Copilot Code Review in the trailing 24 h |
+| `user_initiated_interaction_count` | Number (nullable) | Total user-initiated interactions (org-wide, on this day) |
+| `code_generation_activity_count` | Number (nullable) | Total code generation events (org-wide) |
+| `code_acceptance_activity_count` | Number (nullable) | Total accepted code suggestions (org-wide) |
+| `loc_suggested_to_add_sum` | Number (nullable) | Total lines suggested to add (org-wide, pre-acceptance) |
+| `loc_suggested_to_delete_sum` | Number (nullable) | Total lines suggested to delete (org-wide, pre-acceptance) |
+| `loc_added_sum` | Number (nullable) | Total lines of AI-generated code accepted and added (org-wide) |
+| `loc_deleted_sum` | Number (nullable) | Total lines of AI-generated code accepted and deleted (org-wide) |
+| `pull_requests` | Object (nullable) | PR metrics object e.g. `{"total_reviewed": N, "total_created": N, ...}` |
+| `totals_by_ide` | Array (nullable) | Breakdown by IDE — passthrough JSON array |
+| `totals_by_feature` | Array (nullable) | Breakdown by Copilot feature — passthrough JSON array |
+| `totals_by_language_feature` | Array (nullable) | Breakdown by language × feature — passthrough JSON array |
+| `totals_by_language_model` | Array (nullable) | Breakdown by language × model — passthrough JSON array |
+| `totals_by_model_feature` | Array (nullable) | Breakdown by model × feature — passthrough JSON array |
 | `collected_at` | String | Collection timestamp (UTC ISO 8601) — framework-injected |
 | `data_source` | String | Always `insight_github_copilot` — framework-injected |
 
-> **Provisional**: Org-level metric field names are inferred from GitHub API documentation; the live reports endpoint may use different naming conventions. JSON Schema must include `additionalProperties: true` to passthrough unexpected fields. Confirm exact field names against live API before Silver model activation.
+Field set confirmed against live `constructor-tech-org` API (2026-04-29). `additionalProperties: true` ensures new API fields pass through without a schema migration.
 
 **PK / dedup key**: `unique_key`. Granularity: one row per `(tenant, source, day)`. Incremental, append-only.
 
@@ -835,13 +868,13 @@ A full daily incremental sync for a 200-person team (catching up 1 day) takes ap
 |--------|--------|
 | **DATA (Data Architecture)** | Bronze table schemas and primary keys are defined in §3.7. Data partitioning, replication, and archival are managed by the destination operator (ClickHouse / PostgreSQL configuration) — outside connector scope. Data lineage is captured in §4 Silver/Gold Mappings. Data ownership: the destination operator is the data controller; this connector acts as a data processor on their behalf. Data quality monitoring is delegated to the destination operator. |
 | **PERF (Performance)** | Batch data pipeline; one API call per stream per day. Rate-limit handling is the only performance concern and is addressed in NFR `cpt-insightspec-nfr-ghcopilot-rate-limiting`. |
-| **SEC (Security)** | No user-facing surface; no data mutation. Minimal threat model: (1) PAT stored as `airbyte_secret: true` — never logged; rotated via K8s Secret; (2) all data in transit is HTTPS (`api.github.com` and `copilot-reports.github.com`); (3) `manage_billing:copilot` and `read:org` scopes are read-only — no write operations possible; (4) signed URLs are short-lived and GitHub-generated; the connector assumes GitHub API integrity and issues no additional domain verification. |
+| **SEC (Security)** | No user-facing surface; no data mutation. Minimal threat model: (1) PAT stored as `airbyte_secret: true` — never logged; rotated via K8s Secret; (2) all data in transit is HTTPS (`api.github.com` and `copilot-reports.github.com`); (3) `manage_billing:copilot` scope is read-only — no write operations possible; (4) signed URLs are short-lived and GitHub-generated; the connector assumes GitHub API integrity and issues no additional domain verification. |
 | **SAFE (Safety)** | Pure data-extraction pipeline with no interaction with physical systems. |
 | **REL (Reliability)** | Idempotent extraction via deduplication keys; retry logic addresses transient GitHub API failures. Framework-managed state and scheduling. |
 | **UX (Usability)** | No user-facing interface; configuration is a K8s Secret and Airbyte connection form. |
 | **MAINT (Maintainability)** | Python CDK source is < 500 lines of domain-specific code; shared patterns (`auth.py`, `_add_envelope()`, `_fetch_ndjson_records()`) minimize duplication. |
 | **COMPL (Compliance)** | Work emails are personal data; retention, deletion, and access controls are delegated to the destination operator. |
-| **OPS (Operations)** | Deployed as a standard Airbyte connection. Phase 1 observability signals: sync failure surfaced by Airbyte sync status; HTTP 401/403 indicates PAT expiry or insufficient scope; HTTP 429 rate saturation indicates backfill volume spike; `check_connection()` validates credential and org access on each connection setup. Freshness gap: `copilot_user_metrics.max(day)` > 48h behind UTC indicates a missed sync. The `collection_runs` monitoring table (per-stream record counts, API call totals, error counts) is produced by the Argo orchestrator in Phase 2. |
+| **OPS (Operations)** | Deployed as a standard Airbyte connection. Phase 1 observability signals: sync failure surfaced by Airbyte sync status; HTTP 401/403 on seats = PAT expiry or missing `manage_billing:copilot` scope; HTTP 403 on metrics = "Copilot usage metrics" policy disabled (enable under Org Settings → Copilot → Policies); HTTP 429 rate saturation indicates backfill volume spike; `check_connection()` validates credential, org access, and metrics policy on each connection setup. Freshness gap: `copilot_user_metrics.max(day)` > 48h behind UTC indicates a missed sync. The `collection_runs` monitoring table (per-stream record counts, API call totals, error counts) is produced by the Argo orchestrator in Phase 2. |
 | **TEST (Testing)** | Acceptance criteria in PRD §9; integration tests validate connection check and row-level assertions. Airbyte framework provides connector acceptance tests (CATs). |
 
 ### Architecture Decision Records
