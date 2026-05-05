@@ -30,12 +30,16 @@ _secret_json=$(kubectl get secret -n "$_ns" airbyte-auth-secrets -o json 2>/dev/
 
 _jwt_secret=$(echo "$_secret_json" | python3 -c "import sys,json,base64; print(base64.b64decode(json.load(sys.stdin)['data']['jwt-signature-secret']).decode())")
 
-# Mint JWT token (short-lived, 5 minutes)
+# Mint JWT token. Default TTL is 1 hour: register.sh builds CDK connector
+# images on the fly (multi-minute Docker builds), so the original 5-minute
+# token used to expire mid-script and produce 401s after the first build.
+# Override via AIRBYTE_TOKEN_TTL_SECONDS for ephemeral use.
+_token_ttl="${AIRBYTE_TOKEN_TTL_SECONDS:-3600}"
 export AIRBYTE_TOKEN=$(node -e "
   const c=require('crypto');
   const h=Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
   const n=Math.floor(Date.now()/1000);
-  const p=Buffer.from(JSON.stringify({iss:'airbyte-server',sub:'00000000-0000-0000-0000-000000000000',iat:n,exp:n+300})).toString('base64url');
+  const p=Buffer.from(JSON.stringify({iss:'airbyte-server',sub:'00000000-0000-0000-0000-000000000000',iat:n,exp:n+${_token_ttl}})).toString('base64url');
   const s=c.createHmac('sha256','${_jwt_secret}').update(h+'.'+p).digest('base64url');
   console.log(h+'.'+p+'.'+s);
 ")

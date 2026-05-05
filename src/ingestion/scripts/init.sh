@@ -8,22 +8,36 @@ cd "$SCRIPT_DIR/.."
 
 export TOOLKIT_DIR="${SCRIPT_DIR}/../airbyte-toolkit"
 
-echo "=== Resolving ClickHouse credentials ==="
-CH_PASS="${CLICKHOUSE_PASSWORD:-$(kubectl get secret clickhouse-credentials -n data -o jsonpath='{.data.password}' | base64 -d)}"
-if [[ -z "$CH_PASS" ]]; then
-  echo "ERROR: clickhouse-credentials Secret not found or empty in namespace 'data'" >&2
-  echo "  Run: ./secrets/apply.sh --infra-only" >&2
+# Single-namespace umbrella (PR #224). All Insight components — including the
+# bundled ClickHouse StatefulSet — live in the release namespace, default
+# `insight`. Exported so child scripts (airbyte-toolkit/*.sh, sync-flows.sh)
+# inherit the value.
+export INSIGHT_NAMESPACE="${INSIGHT_NAMESPACE:-insight}"
+INSIGHT_NS="$INSIGHT_NAMESPACE"
+CH_POD="${CLICKHOUSE_POD:-statefulset/insight-clickhouse}"
+
+# clickhouse-client inside the StatefulSet pod inherits CLICKHOUSE_USER /
+# CLICKHOUSE_PASSWORD from the container env (set by the chart from
+# auth.existingSecret), so we do not pass --user / --password.
+ch_exec() {
+  kubectl exec -n "$INSIGHT_NS" "$CH_POD" -- clickhouse-client "$@"
+}
+ch_exec_stdin() {
+  kubectl exec -i -n "$INSIGHT_NS" "$CH_POD" -- clickhouse-client "$@"
+}
+
+echo "=== Verifying ClickHouse pod ==="
+if ! kubectl get -n "$INSIGHT_NS" "$CH_POD" >/dev/null 2>&1; then
+  echo "ERROR: ClickHouse not found at -n $INSIGHT_NS $CH_POD" >&2
+  echo "  Ensure the umbrella chart is installed with clickhouse.deploy=true" >&2
+  echo "  (helm list -n $INSIGHT_NS | grep insight)" >&2
   exit 1
 fi
-export CLICKHOUSE_PASSWORD="$CH_PASS"
 
 echo "=== Creating dbt databases ==="
-kubectl exec -n data deploy/clickhouse -- clickhouse-client --password "$CH_PASS" \
-  --query "CREATE DATABASE IF NOT EXISTS staging" 2>/dev/null
-kubectl exec -n data deploy/clickhouse -- clickhouse-client --password "$CH_PASS" \
-  --query "CREATE DATABASE IF NOT EXISTS silver" 2>/dev/null
-kubectl exec -n data deploy/clickhouse -- clickhouse-client --password "$CH_PASS" \
-  --query "CREATE DATABASE IF NOT EXISTS insight" 2>/dev/null
+for db in staging silver insight; do
+  ch_exec --query "CREATE DATABASE IF NOT EXISTS $db"
+done
 
 echo "=== Creating bronze placeholders for missing connectors ==="
 "$SCRIPT_DIR/create-bronze-placeholders.sh"
@@ -32,8 +46,7 @@ echo "=== Running ClickHouse migrations ==="
 for migration in "$SCRIPT_DIR/migrations"/*.sql; do
   [ -f "$migration" ] || continue
   echo "  $(basename "$migration")"
-  grep -v '^\s*--' "$migration" \
-    | kubectl exec -i -n data deploy/clickhouse -- clickhouse-client --password "$CH_PASS" --multiquery
+  grep -v '^\s*--' "$migration" | ch_exec_stdin --multiquery
 done
 
 # MariaDB migrations: each backend service now owns and applies its own
