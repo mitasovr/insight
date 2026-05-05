@@ -133,11 +133,22 @@ models:
         tests:
           - not_null
       - name: major_edits
-        description: "Edits where minor_edit = false"
+        description: >
+          Raw versions (not sessions) where `minor_edit = false`. Note: this
+          counts version rows, NOT collapsed edit sessions like `total_edits`,
+          so `major_edits >= total_edits` in bursty cases. The signal is
+          effectively `total_versions_authored` because of the dead
+          `minor_edit` flag (see below). Tracked for removal in #260.
         tests:
           - not_null
       - name: minor_edits
-        description: "Edits where minor_edit = true"
+        description: >
+          Raw versions where `minor_edit = true`. The Confluence Cloud
+          `/pages/{id}/versions` API always returns `minorEdit: false`
+          regardless of how the flag was set on PUT (verified empirically
+          on darthvolt.atlassian.net, 2026-05-05). As a result this column
+          is uniformly 0 in practice and `major_edits ≡ count(raw versions)`.
+          Tracked for removal in #260.
         tests:
           - not_null
       - name: source
