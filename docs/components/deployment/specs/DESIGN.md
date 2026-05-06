@@ -453,7 +453,7 @@ Developers iterate faster when the platform bring-up is one command. The wrapper
 
 ##### Responsibility scope
 
-- Bootstraps a Kind cluster named `insight` if absent.
+- Bootstraps a Kind cluster named `insight` if absent. The cluster config (`k8s/kind-config.yaml`) pins a specific `kindest/node` image (currently `v1.29.2`) so the dev path is independent of the host's installed `kind` binary version. Recent kind defaults (`v1.32+`) require cgroup v2, which Docker Desktop on Windows and several Linux distros do not provide; pinning to a cgroup-v1-compatible image keeps the bring-up working on stock developer hosts. Bumping the pin requires validating Argo / Airbyte / bitnami subchart compatibility against the new node image.
 - Builds backend images and loads them with `kind load docker-image`.
 - Builds the frontend image from the sibling `insight-front` checkout with native-arch try + `linux/amd64` fallback; on pull-only paths uses `docker pull --platform`.
 - Sets `INSIGHT_VALUES_FILES` to include `deploy/values-dev.yaml`.
