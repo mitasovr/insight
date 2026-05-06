@@ -65,11 +65,12 @@ SQL
 # ---------------------------------------------------------------------------
 #
 # Each silver placeholder carries `COMMENT 'INSIGHT_PLACEHOLDER_v1'` so the
-# dbt `drop_placeholder_if_present` macro (see
-# src/ingestion/dbt/macros/drop_placeholder_if_present.sql) can detect and
-# drop it on the first real dbt run before the silver model rebuilds the
-# table with its full schema. This is the bridge that keeps placeholder
-# schema drift from corrupting silver writes.
+# dbt `drop_silver_placeholders_at_start` macro (see
+# src/ingestion/dbt/macros/drop_silver_placeholders_at_start.sql) can detect
+# and drop it on the first real dbt run via the project-level
+# `on-run-start` hook, before the silver model rebuilds the table with its
+# full schema. This is the bridge that keeps placeholder schema drift from
+# corrupting silver writes.
 #
 # The marker + the macro can be retired once gold-view migrations are
 # split into a post-dbt phase (Variant A in ADR-0007's "Better fixes"

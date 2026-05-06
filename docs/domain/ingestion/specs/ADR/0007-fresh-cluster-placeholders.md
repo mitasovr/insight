@@ -112,7 +112,7 @@ with a placeholder for that table. Silver placeholders MUST end with
   schema between PRs. If a placeholder is missing a column the new
   migration references, the install fails until someone extends the
   placeholder. Detection is live-test: there is no static check. The
-  silver `drop_placeholder_if_present` pre_hook mitigates one branch
+  silver `drop_silver_placeholders_at_start` on-run-start hook mitigates one branch
   of this — schema mismatch between placeholder and dbt staging output
   no longer corrupts silver writes, because the placeholder is dropped
   before the first real INSERT — but it does not detect a placeholder
@@ -142,7 +142,7 @@ be unblocked without committing to an architectural redesign.
 
 When the first follow-up lands, the silver placeholder blocks in
 `scripts/create-bronze-placeholders.sh` AND the
-`drop_placeholder_if_present` macro + project-level pre_hook MUST be
+`drop_silver_placeholders_at_start` macro + project-level on-run-start hook MUST be
 removed in the same PR — the comment markers and the dbt-side drop
 become dead code once silver tables are no longer pre-stubbed.
 
