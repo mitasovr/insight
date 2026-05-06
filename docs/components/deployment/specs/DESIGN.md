@@ -527,6 +527,7 @@ Developers iterate faster when the platform bring-up is one command. The wrapper
 | `src/frontend/helm` | Helm subchart | Mandatory SPA shipped under `frontend` alias. |
 | `helmfile/charts/clickhouse` | Helm subchart (local wrapper) | ClickHouse OLAP store. |
 | `charts/insight/templates/ingestion/*.yaml` | First-class Helm templates | Ingestion WorkflowTemplate sources, gated by `ingestion.templates.enabled`; consume umbrella helpers directly via `include`. |
+| `helmfile.yaml.gotmpl` | Repo-root helmfile (legacy, EXPERIMENTAL) | Pre-#224 alternative install path. Structurally incompatible with the post-#224 umbrella + bitnami-subcharts + Secret-emission pattern (`helmfile sync` fails on the local clickhouse subchart's `required` checks; api-gateway gets dead `clickhouse:` config; analytics-api/identity-resolution depend on Secrets the umbrella emits). Header warning in the file documents the three issues; retained for reference only and may be removed entirely in a follow-up cleanup. **Not on any canonical install path.** |
 | `src/ingestion/airbyte-toolkit/lib/env.sh` | Read `AIRBYTE_API_URL` from the platform ConfigMap | Ingestion scripts consume Airbyte coordinates from the ConfigMap rather than hard-coding. |
 
 **Dependency Rules**:
