@@ -25,7 +25,7 @@ This document is the technical source of truth for the hybrid GitOps deployment 
    - [3.4 Engineer Pulls and Deploys](#34-engineer-pulls-and-deploys)
 4. [4. Security Implementation](#4-security-implementation)
    - [4.1 Secret Lifecycle](#41-secret-lifecycle)
-   - [4.2 1Password Integration](#42-1password-integration)
+   - [4.2 Passbolt Integration](#42-passbolt-integration)
    - [4.3 Sealed Secrets Sealing Flow](#43-sealed-secrets-sealing-flow)
    - [4.4 In-Repo Rules](#44-in-repo-rules)
 5. [5. Local Environment Setup](#5-local-environment-setup)
@@ -86,7 +86,7 @@ The deployment system has four explicit goals:
                          +-------------------+               |
                                                              |
                          +-------------------+   reads       |
-                         | 1Password (corp.) |<--------------+
+                         | Passbolt (corp.)  |<--------------+
                          | secret material   |  engineer
                          +-------------------+  (kubeseal time)
 ```
@@ -112,7 +112,7 @@ Customers and external evaluators never see `infra/insight-gitops`. The public `
 ### 1.4 Trust Boundaries
 
 - **Public**: GitHub repo, GitHub Actions runners, GHCR. May be read by the world; signed but not confidential.
-- **Corporate (VPN)**: GitLab server, GitLab CI runners, Kubernetes API endpoints, 1Password instance, engineer workstation while the VPN is up.
+- **Corporate (VPN)**: GitLab server, GitLab CI runners, Kubernetes API endpoints, Passbolt instance, engineer workstation while the VPN is up.
 - **In-cluster**: the cluster reads sealed secrets from its own etcd (after the controller decrypts) and never reaches out to either Git host.
 
 The boundary that matters: the only object that crosses from public to corporate is the **container image** (read-only, pulled by the cluster's image-pull credentials). Manifests and secrets never cross outward.
@@ -244,24 +244,25 @@ There are three distinct states for any piece of secret material:
 
 | State | Where it lives | How to read |
 |-------|----------------|-------------|
-| Raw secret | 1Password vault `Insight / Infra` | `op read "op://Insight/Infra/<item>/<field>"` |
+| Raw secret | Passbolt resource named `insight-<env>-<base>` (password field carries the full cleartext Kubernetes Secret YAML) | `passbolt resource get --name "insight-<env>-<base>" --jsonPassword \| jq -r .password` |
 | Sealed manifest | `infra/insight-gitops/environments/<env>/sealed-secrets/<name>-sealedsecret.yaml` (committed) | Anyone with repo read access; opaque to humans |
 | In-cluster Secret | Kubernetes API, decrypted by `sealed-secrets-controller` | `kubectl get secret <name> -o yaml` (RBAC-gated) |
 
 The flow between states is one-way at write-time:
 
 ```
-1Password ─(engineer + kubeseal)─▶ Sealed manifest ─(controller)─▶ In-cluster Secret
+Passbolt ─(engineer + kubeseal)─▶ Sealed manifest ─(controller)─▶ In-cluster Secret
 ```
 
-There is no path that puts a raw secret on disk in cleartext between 1Password and the sealed manifest. The Makefile streams `op read` straight into `kubeseal` (see [§4.3](#43-sealed-secrets-sealing-flow)).
+There is no path that puts a raw secret on disk in cleartext between Passbolt and the sealed manifest. The Makefile streams `passbolt resource get` straight into `kubeseal` (see [§4.3](#43-sealed-secrets-sealing-flow)).
 
-### 4.2 1Password Integration
+### 4.2 Passbolt Integration
 
 - Authoritative store for raw passwords, OIDC client secrets, database passwords, GHCR pull secrets, TLS keys.
-- One vault per environment is the future plan; for the MVP a single `Insight / Infra` vault with environment-suffixed item names (`oidc-client-secret-dev`, `oidc-client-secret-prod`) is acceptable.
-- Engineers authenticate via `op signin` with TouchID; CI never authenticates to 1Password (the sealing step is a human action).
-- The `op` CLI is the only sanctioned way to read a secret. `pbpaste`/screenshots of the desktop app are explicitly not.
+- **Storage convention**: one Passbolt resource per Kubernetes Secret per environment. The resource's **password field carries the entire cleartext Kubernetes Secret YAML**, ready to be piped to `kubeseal` without further composition. The resource's URI/username/description fields are documentation only (e.g. `kubectl-namespace=insight`, `kubectl-name=insight-oidc`).
+- **Naming**: `insight-<env>-<base>` (e.g. `insight-dev-oidc`, `insight-virtuozzo-db-creds`). The Makefile defaults `PASSBOLT_NAME` to this expression so the engineer rarely passes it explicitly.
+- **Authentication**: each engineer's Passbolt account is bound to their personal GPG keypair. `passbolt configure` is run once per workstation to register the server URL, the user, and the private key; subsequent `passbolt resource get` decrypts via the local GPG agent (passphrase cached in the OS keychain). CI never authenticates to Passbolt — the sealing step is a human action.
+- The `passbolt` CLI (community: [`go-passbolt-cli`](https://github.com/passbolt/go-passbolt-cli)) is the only sanctioned way to read a secret. Browser-extension copy/paste, screenshots, or pasting into chat are explicitly not.
 
 ### 4.3 Sealed Secrets Sealing Flow
 
@@ -270,11 +271,11 @@ There is no path that puts a raw secret on disk in cleartext between 1Password a
 The Makefile target `seal-secret` (see [§6.5](#65-sealed-secret-targets)) implements the streaming flow:
 
 ```bash
-op read "op://Insight/Infra/${SECRET_REF}/password" \
-  | kubectl create secret generic "${NAME}" \
-      --namespace="${NAMESPACE}" \
-      --from-file=password=/dev/stdin \
-      --dry-run=client -o yaml \
+# Convention: the Passbolt resource named "insight-${ENV}-${NAME}" has,
+# in its password field, the complete cleartext Kubernetes Secret YAML
+# for ${NAME} on ${ENV}. The pipe below never materialises it on disk.
+passbolt resource get --name "insight-${ENV}-${NAME}" --jsonPassword \
+  | jq -r .password \
   | kubeseal --format yaml \
       --cert "environments/${ENV}/pub-cert.pem" \
   > "environments/${ENV}/sealed-secrets/${NAMESPACE}/${NAME}-sealedsecret.yaml"
@@ -282,12 +283,10 @@ op read "op://Insight/Infra/${SECRET_REF}/password" \
 
 Properties:
 
-- The raw secret is in the pipe only; never on disk, never in shell history (a heredoc would be in the script's stdin buffer, which is acceptable; `op read | …` is the canonical form).
-- `--dry-run=client` means `kubectl` does not call any cluster — the Secret YAML is generated locally.
+- The raw secret lives in the pipe only; never on disk, never in shell history. `passbolt resource get | jq -r .password | kubeseal …` is the canonical form.
+- The Passbolt resource holds the **whole** Kubernetes Secret manifest (including `apiVersion`, `metadata.name`, `metadata.namespace`, `type`, and every key under `stringData`). `kubeseal` reads it as one object, so no `kubectl create` step is needed. Multi-key secrets (an OIDC client with seven fields) cost no more than single-key secrets.
 - `pub-cert.pem` is the cluster controller's public certificate, fetched once per environment and committed to the repo at `environments/<env>/pub-cert.pem`. Renewal procedure is in §8 Open Items.
 - The output file is committed. The plaintext input is not, because it never existed as a file.
-
-For multi-key secrets (an OIDC client with both an issuer and a client secret), the sealer composes a `--from-literal` plus `--from-file` mix; the script wrapper hides this.
 
 ### 4.4 In-Repo Rules
 
@@ -296,7 +295,7 @@ These are non-negotiable rules enforced by review and by a pre-commit hook in `i
 1. **No plain secrets in Git.** A pre-commit hook runs `gitleaks` against the staged diff and refuses commits that match its rule set.
 2. **Sealed manifests only as `*-sealedsecret.yaml`.** Templates (which contain example/empty values) live alongside as `*-secret-template.yaml` and are explicitly listed in the hook's allowlist.
 3. **Public certificate is the only key material in Git.** Private keys and Bitnami sealed-secrets-controller's master key live in the cluster only.
-4. **No `.env` files.** Local development reads from `op` directly (`op run --env-file=.env.tmpl -- <cmd>`), keeping the cleartext in process memory.
+4. **No `.env` files.** Local development reads from `passbolt` directly (`passbolt resource get … | jq -r .password`), keeping the cleartext in process memory.
 
 ## 5. Local Environment Setup
 
@@ -309,7 +308,8 @@ The Makefile checks for each tool at the top of every target and fails fast with
 | `helm` | 3.14 | `brew install helm` | Render and apply the umbrella chart. |
 | `kubectl` | 1.27 | `brew install kubectl` | Cluster-side dry-runs, rollout status, log inspection. |
 | `kubeseal` | 0.27 | `brew install kubeseal` | Encrypt secrets against the cluster controller public cert. |
-| `op` (1Password CLI) | 2.x | `brew install --cask 1password-cli` | Read secret material from 1Password without ever writing it to disk. |
+| `passbolt` (go-passbolt-cli) | 0.7+ | `brew tap passbolt/tap && brew install go-passbolt-cli` | Read secret material from Passbolt without ever writing it to disk. |
+| `gpg` | 2.4+ | `brew install gnupg` | Required by the Passbolt CLI to decrypt the user's private key locally. |
 | `skopeo` | 1.14 | `brew install skopeo` | Read GHCR tag listings; also used by the GitLab poller. |
 | `yq` | 4.x | `brew install yq` | Read and write `image.tag` and other values keys in YAML. |
 | `git` | 2.40 | system | Repo sync. |
@@ -323,7 +323,7 @@ A `Brewfile` at the repo root captures these dependencies; `make doctor` runs `b
 - **GitLab** — engineer authenticates with SSH key (`gitlab.cyberfabric.internal`); the deploy-key for the poller is separate and lives only in the GitLab CI variables store.
 - **GHCR** — pulls are public; the cluster's image-pull secret is only needed if the team flips an image to private later. The pull secret itself is a sealed secret in the repo.
 - **Kubernetes** — engineer's kubeconfig is generated by the corporate IdP; per-cluster contexts are named `insight-dev`, `insight-stage`, `insight-prod`. The Makefile checks `kubectl config current-context` against the requested `ENV` before any apply.
-- **1Password** — `op signin` is interactive; subsequent `op read` reuses the session token cached in the OS keychain.
+- **Passbolt** — `passbolt configure` is run once per workstation: it asks for the server URL, the user's private GPG key file, and the key passphrase. Subsequent `passbolt resource get` invocations decrypt via the local GPG agent; the passphrase is cached in the OS keychain for the agent's TTL.
 
 ### 5.3 VPN and Cluster Access
 
@@ -363,7 +363,7 @@ RENDER_DIR  := .deploy
 | `make rollback` | Roll back to the previous Helm revision. | `vpn-up`, `kube-ctx` | `helm rollback`. |
 | `make status` | Show release status and rollout health. | `vpn-up`, `kube-ctx` | Read-only. |
 | `make tag` | Tag the deploy commit as `deploy-…`. | `sync-clean` | Local + remote git tag. Optional. |
-| `make seal-secret NAME=… NAMESPACE=… SECRET_REF=…` | Seal a value from 1Password into a sealed-secret manifest. | `op-signed-in` | Writes one `*-sealedsecret.yaml`. |
+| `make seal-secret NAME=… NAMESPACE=… [PASSBOLT_NAME=…]` | Seal the cleartext Secret YAML stored in Passbolt into a sealed-secret manifest. `PASSBOLT_NAME` defaults to `insight-$(ENV)-$(NAME)`. | `passbolt-configured` | Writes one `*-sealedsecret.yaml`. |
 | `make clear-seal-template NAME=…` | Reset a template file to empty values. | none | Edits the template in place. |
 
 ### 6.3 Pre-flight Safety Checks
@@ -398,10 +398,10 @@ confirm-prod:
 	@if [ "$(ENV)" = "prod" ] && [ "$(CONFIRM)" != "yes-deploy-prod" ]; then \
 		echo "ERROR: production deploy requires CONFIRM=yes-deploy-prod"; exit 1; fi
 
-.PHONY: op-signed-in
-op-signed-in:
-	@op whoami >/dev/null 2>&1 \
-		|| { echo "ERROR: 1Password CLI not signed in; run 'op signin'"; exit 1; }
+.PHONY: passbolt-configured
+passbolt-configured:
+	@passbolt verify >/dev/null 2>&1 \
+		|| { echo "ERROR: Passbolt CLI not configured or unreachable; run 'passbolt configure' (and connect VPN if your Passbolt is internal)"; exit 1; }
 ```
 
 Rationale, one line per check:
@@ -410,7 +410,7 @@ Rationale, one line per check:
 - `vpn-up` makes "wrong network" a clean error rather than a 10-minute Helm timeout.
 - `kube-ctx` prevents the worst class of accident: deploying `prod` values into the `dev` cluster (or vice versa) because the context was left selected from a previous task.
 - `confirm-prod` is a deliberately ugly flag. If you can type `CONFIRM=yes-deploy-prod`, you have looked at it.
-- `op-signed-in` is checked at the start of `seal-secret` rather than inside the pipe so the failure message is clear.
+- `passbolt-configured` is checked at the start of `seal-secret` rather than inside the pipe so the failure message is clear.
 
 ### 6.4 Deploy Logic
 
@@ -439,16 +439,12 @@ Notes:
 
 ```make
 .PHONY: seal-secret
-seal-secret: op-signed-in
-	@test -n "$(NAME)"        || { echo "NAME is required"; exit 1; }
-	@test -n "$(NAMESPACE)"   || { echo "NAMESPACE is required"; exit 1; }
-	@test -n "$(SECRET_REF)"  || { echo "SECRET_REF is required (e.g. op://Insight/Infra/oidc-client-secret-dev/password)"; exit 1; }
-	@mkdir -p environments/$(ENV)/sealed-secrets/$(NAMESPACE)
-	op read "$(SECRET_REF)" \
-	  | kubectl create secret generic "$(NAME)" \
-	      --namespace="$(NAMESPACE)" \
-	      --from-file=password=/dev/stdin \
-	      --dry-run=client -o yaml \
+seal-secret: passbolt-configured
+	@test -n "$(NAME)"      || { echo "NAME is required"; exit 1; }
+	@test -n "$(NAMESPACE)" || { echo "NAMESPACE is required"; exit 1; }
+	@PB_NAME="$${PASSBOLT_NAME:-insight-$(ENV)-$(NAME)}"; \
+	mkdir -p environments/$(ENV)/sealed-secrets/$(NAMESPACE); \
+	scripts/passbolt-fetch.sh "$$PB_NAME" \
 	  | kubeseal --format yaml \
 	      --cert "environments/$(ENV)/pub-cert.pem" \
 	  > "environments/$(ENV)/sealed-secrets/$(NAMESPACE)/$(NAME)-sealedsecret.yaml"
