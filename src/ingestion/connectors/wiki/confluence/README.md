@@ -90,4 +90,4 @@ wiki_pages.author_id (accountId)
 - No analytics data (view counts, distinct viewers) -- deferred to Phase 2
 - No email resolution at connector level -- resolved in Silver via jira_user
 - Client-side incremental cursor (API lacks server-side `lastModifiedAfter`)
-- No blog post or comment extraction
+- No blog post extraction (comments are now ingested per #285 -- footer + inline + replies)
