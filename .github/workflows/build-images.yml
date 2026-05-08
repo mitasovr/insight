@@ -323,4 +323,20 @@ jobs:
           # against THIS commit, so service-file changes are correctly
           # detected on the subsequent run.
           git commit -m "chore(release): umbrella ${UMBRELLA_VERSION} (build ${BUILD_TAG}) [skip ci]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+          # Push, with one rebase-retry to absorb a race against
+          # origin/${GITHUB_REF_NAME} advancing between job start and
+          # now. The workflow concurrency group narrows but does not
+          # eliminate this window — a manual push, an unrelated
+          # workflow's push, or a force-push could all advance the
+          # branch tip. Mirrors the gitops poller's policy: rebase
+          # once, fail loud on second failure.
+          if ! git push origin "HEAD:${GITHUB_REF_NAME}"; then
+            echo "push failed; rebasing onto refreshed origin/${GITHUB_REF_NAME} and retrying"
+            if ! git pull --rebase origin "${GITHUB_REF_NAME}"; then
+              echo "rebase failed (conflict on bumped files?); aborting"
+              git rebase --abort 2>/dev/null || true
+              exit 1
+            fi
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
