@@ -63,8 +63,8 @@ SELECT
     toUInt32(coalesce(code_tool_accepted_count, 0)
            + coalesce(code_tool_rejected_count, 0))                    AS tool_use_offered,
     toUInt32(coalesce(code_tool_accepted_count, 0))                    AS tool_use_accepted,
-    -- completions_count := accepted Code tool invocations (Edit/Write/MultiEdit/NotebookEdit)
-    toUInt32(coalesce(code_tool_accepted_count, 0))                    AS completions_count,
+    -- #262: `completions_count` dropped from class_ai_dev_usage — it was
+    -- numerically identical to tool_use_accepted (both = code_tool_accepted_count).
     -- agent_sessions := no direct Enterprise equivalent. Enterprise's cowork_dispatch_turn_count
     -- represents agentic turns in Cowork (different product surface), not Code agent runs.
     -- Leave NULL until Anthropic exposes a Code-specific agent counter.

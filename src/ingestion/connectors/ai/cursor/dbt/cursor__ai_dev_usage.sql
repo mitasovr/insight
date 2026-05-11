@@ -49,7 +49,8 @@ SELECT
     toUInt32(coalesce(totalLinesDeleted, 0))        AS total_lines_removed,
     toUInt32OrNull(toString(totalTabsShown))        AS tool_use_offered,
     toUInt32OrNull(toString(totalTabsAccepted))     AS tool_use_accepted,
-    toUInt32OrNull(toString(totalTabsAccepted))     AS completions_count,
+    -- #262: `completions_count` was numerically identical to tool_use_accepted
+    -- (both = totalTabsAccepted) and dropped from class_ai_dev_usage.
     toUInt32OrNull(toString(agentRequests))         AS agent_sessions,
     toUInt32(coalesce(chatRequests, 0) + coalesce(composerRequests, 0))
                                                     AS chat_requests,

@@ -147,8 +147,6 @@ models:
         description: "tool_use_accepted + tool_use_rejected"
       - name: tool_use_accepted
         description: "Accepted tool actions (Edit/Write/MultiEdit/NotebookEdit)"
-      - name: completions_count
-        description: "NULL — not reported by Claude Code"
       - name: agent_sessions
         description: "NULL — not reported by Claude Code"
       - name: chat_requests

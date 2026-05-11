@@ -211,7 +211,6 @@ CREATE TABLE IF NOT EXISTS silver.class_ai_dev_usage (
     day                  Date,
     tool                 String,
     is_active            UInt8,
-    completions_count    Nullable(Float64),
     agent_sessions       Nullable(Float64),
     chat_requests        Nullable(Float64),
     tool_use_offered     Nullable(Float64),

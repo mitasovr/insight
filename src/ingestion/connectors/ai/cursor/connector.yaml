@@ -1,4 +1,12 @@
-version: "7.0.4"
+# CDK manifest version: pinned to 6.60.9. On 7.0.4 the
+# BasicHttpAuthenticator's `{{ config['cursor_api_key'] }}` template is not
+# interpolated when only the `username` field is provided (no `password`) —
+# the resulting Authorization header is `Basic Og==` (empty user:password)
+# and every request returns 401. 6.60.9 evaluates the template correctly.
+# Adding an explicit `password: ""` did not work around the bug. Confluence
+# (CDK 6.60.9) and Claude Admin/Enterprise (CDK 7.0.4 but with
+# ApiKeyAuthenticator, not BasicHttpAuthenticator) are unaffected.
+version: "6.60.9"
 type: DeclarativeSource
 
 check:

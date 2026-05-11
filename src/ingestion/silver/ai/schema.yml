@@ -92,10 +92,6 @@ models:
           Tool invocations accepted. For Cursor: totalTabsAccepted.
           For Claude Code: tool_use_accepted (Edit/Write/MultiEdit/NotebookEdit). Used in
           cursor_acceptance / cc_tool_acceptance ratios (accepted / offered).
-      - name: completions_count
-        description: >
-          Cursor tab completions accepted (totalTabsAccepted). NULL for other tools
-          that do not have a tab-completion analogue.
       - name: agent_sessions
         description: >
           Cursor agent sessions (agentRequests). NULL for other tools.
