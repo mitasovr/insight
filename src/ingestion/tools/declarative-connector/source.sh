@@ -10,14 +10,24 @@ set -euo pipefail
 # Airbyte platform. Useful for rapid manifest development and validation.
 #
 # Usage:
-#   ./source.sh check   <class>/<connector> <tenant>
-#   ./source.sh discover <class>/<connector> <tenant>
-#   ./source.sh read     <class>/<connector> <tenant>
+#   ./source.sh validate        <class>/<connector>
+#   ./source.sh validate-strict <class>/<connector>
+#   ./source.sh check           <class>/<connector> <tenant>
+#   ./source.sh discover        <class>/<connector> <tenant>
+#   ./source.sh read            <class>/<connector> <tenant>
+#
+# validate vs validate-strict:
+#   - `validate` passes if the CDK loader accepts the manifest at runtime. It is
+#     lenient and resolves `$ref` before validation, so it will happily accept
+#     manifests that the Airbyte Builder UI rejects.
+#   - `validate-strict` runs the manifest through the Airbyte Builder JSON-schema
+#     validator (no `$ref` resolution). Use this before attempting to open the
+#     manifest in the Builder UI. Emits per-path error messages.
 #
 # Example:
-#   ./source.sh check   collaboration/m365 example-tenant
-#   ./source.sh discover collaboration/m365 example-tenant
-#   ./source.sh read     collaboration/m365 example-tenant
+#   $0 validate        collaboration/m365
+#   $0 validate-strict task-tracking/youtrack
+#   $0 check           collaboration/m365 example-tenant
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,26 +47,33 @@ SECRETS_TMPFS_OPTS="${AIRBYTE_SECRETS_TMPFS_OPTS:-/secrets:rw,mode=1777}"  # RUL
 usage() {
   cat >&2 <<EOF
 Usage:
-  $0 validate <class>/<connector>
-  $0 check    <class>/<connector>
-  $0 discover <class>/<connector>
-  $0 read     <class>/<connector> <connection>
+  $0 validate        <class>/<connector>
+  $0 validate-strict <class>/<connector>
+  $0 check           <class>/<connector> <tenant>
+  $0 discover        <class>/<connector> <tenant>
+  $0 read            <class>/<connector> <tenant>
 
 Commands:
-  validate  Validate manifest structure (no credentials needed)
-  check     Validate manifest + credentials against source API
-  discover  List available streams and their schemas
-  read      Extract data (outputs Airbyte Protocol JSON to stdout)
+  validate        Runtime validation — passes if the CDK loader accepts the
+                  manifest. Resolves \$ref before checking. Lenient.
+  validate-strict Strict Builder-UI validation — runs the manifest through the
+                  declarative_component_schema.yaml validator WITHOUT \$ref
+                  resolution. Use this before opening the manifest in the
+                  Airbyte Builder UI. Reports per-path errors.
+  check           Manifest + credentials against source API (smoke test)
+  discover        List available streams and their schemas
+  read            Extract data (outputs Airbyte Protocol JSON to stdout)
 
 Arguments:
   <class>/<connector>  Path relative to connectors/ (e.g. collaboration/m365)
   <tenant>             Tenant name (reads credentials from connections/<tenant>.yaml)
 
 Examples:
-  $0 validate collaboration/m365
-  $0 check   collaboration/m365 example-tenant
-  $0 discover collaboration/m365 example-tenant
-  $0 read     collaboration/m365 example-tenant
+  $0 validate        collaboration/m365
+  $0 validate-strict task-tracking/youtrack
+  $0 check           collaboration/m365 example-tenant
+  $0 discover        collaboration/m365 example-tenant
+  $0 read            collaboration/m365 example-tenant
 EOF
 }
 
@@ -90,8 +107,8 @@ if [[ ! -f "${manifest_path}" ]]; then
   exit 1
 fi
 
-# --- Load credentials from K8s Secret file + tenant yaml (skip for validate) ---
-if [[ "${command}" != "validate" ]]; then
+# --- Load credentials from K8s Secret file + tenant yaml (skip for validate modes) ---
+if [[ "${command}" != "validate" && "${command}" != "validate-strict" ]]; then
   tenant="${3:-}"
   SECRETS_DIR="${SCRIPT_DIR}/../../secrets/connectors"
 
@@ -196,6 +213,19 @@ case "${command}" in
         exit 1
       fi
     }
+    ;;
+
+  validate-strict)
+    # Run the exact jsonschema check the Builder UI performs (no $ref resolution).
+    # Logic lives in validate_strict.py (per the no-inline-Python rule in
+    # cypilot/config/rules/code-conventions.md §"No inline scripts"); this case
+    # just mounts the script + the connector dir and invokes it inside the
+    # container which ships airbyte_cdk + pyyaml + jsonschema.
+    docker run --rm \
+      --entrypoint=/bin/sh \
+      -v "${connector_dir}:/input:ro" \
+      -v "${SCRIPT_DIR}/validate_strict.py:/scripts/validate_strict.py:ro" \
+      "${IMAGE}" -c "python3 /scripts/validate_strict.py /input/connector.yaml"
     ;;
 
   check|discover)
