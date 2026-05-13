@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Insight.Identity.Domain;
 
 namespace Insight.Identity.Api.Contracts;
 
@@ -27,4 +28,32 @@ public sealed record ProfileResponse(
     [property: JsonPropertyName("parent_email"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ParentEmail,
     [property: JsonPropertyName("parent_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ParentId,
     [property: JsonPropertyName("parent_person_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ParentPersonId,
-    [property: JsonPropertyName("ids")] IReadOnlyList<ProfileIdEntry> Ids);
+    [property: JsonPropertyName("ids")] IReadOnlyList<ProfileIdEntry> Ids)
+{
+    public static ProfileResponse From(Profile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        var ids = profile.Ids.Count == 0
+            ? Array.Empty<ProfileIdEntry>()
+            : profile.Ids
+                .Select(static s => new ProfileIdEntry(s.InsightSourceType, s.InsightSourceId, s.Value))
+                .ToArray();
+        return new ProfileResponse(
+            profile.PersonId,
+            profile.InsightTenantId,
+            profile.Email,
+            profile.DisplayName,
+            profile.FirstName,
+            profile.LastName,
+            profile.Department,
+            profile.Division,
+            profile.JobTitle,
+            profile.Status,
+            profile.Username,
+            profile.EmployeeId,
+            profile.ParentEmail,
+            profile.ParentId,
+            profile.ParentPersonId,
+            ids);
+    }
+}
