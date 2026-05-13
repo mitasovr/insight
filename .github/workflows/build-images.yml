@@ -35,20 +35,36 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      ingestion: ${{ steps.filter.outputs.ingestion }}
-      jira_enrich: ${{ steps.filter.outputs.jira_enrich }}
-      umbrella: ${{ steps.filter.outputs.umbrella }}
-      build_tag: ${{ steps.tag.outputs.build_tag }}
+      # Per-service filters so a single-service code change only rebuilds
+      # that one image. The Rust services share a Cargo workspace, so a
+      # workspace-root Cargo.toml / Cargo.lock change is treated as a
+      # cross-cutting trigger for both api-gateway and analytics-api.
+      # The .NET identity service is self-contained (no Cargo workspace
+      # membership) — only its own folder triggers a rebuild.
+      api_gateway:   ${{ steps.filter.outputs.api_gateway }}
+      analytics_api: ${{ steps.filter.outputs.analytics_api }}
+      identity:      ${{ steps.filter.outputs.identity }}
+      toolbox:       ${{ steps.filter.outputs.toolbox }}
+      jira_enrich:   ${{ steps.filter.outputs.jira_enrich }}
+      umbrella:      ${{ steps.filter.outputs.umbrella }}
+      build_tag:     ${{ steps.tag.outputs.build_tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
-            backend:
-              - 'src/backend/**'
-            ingestion:
+            api_gateway:
+              - 'src/backend/services/api-gateway/**'
+              - 'src/backend/Cargo.toml'
+              - 'src/backend/Cargo.lock'
+            analytics_api:
+              - 'src/backend/services/analytics-api/**'
+              - 'src/backend/Cargo.toml'
+              - 'src/backend/Cargo.lock'
+            identity:
+              - 'src/backend/services/identity/**'
+            toolbox:
               - 'src/ingestion/**'
             jira_enrich:
               - 'src/ingestion/connectors/task-tracking/jira/enrich/**'
@@ -67,57 +83,98 @@ jobs:
           echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
           echo "Build tag for this run: ${BUILD_TAG}"
 
-  backend:
+  # Per-service backend builds. Split from a single matrix job so that a
+  # change touching only one service rebuilds only that image — and only
+  # that subchart's `appVersion` gets bumped downstream. This is what
+  # makes per-service granularity actually work in the gitops promotion
+  # flow (see publish-chart for the appVersion logic).
+
+  backend-api-gateway:
     needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.api_gateway == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - image: insight-api-gateway
-            dockerfile: services/api-gateway/Dockerfile
-          - image: insight-analytics-api
-            dockerfile: services/analytics-api/Dockerfile
-          # .NET 9 identity service. Context is the service folder itself,
-          # not src/backend/, because it's self-contained (no Cargo workspace).
-          - image: insight-identity
-            dockerfile: services/identity/Dockerfile
-            context: src/backend/services/identity
     steps:
       - uses: actions/checkout@v4
-
       - uses: docker/setup-buildx-action@v3
-
-      # Authenticate to GHCR only when we'll actually push (main pushes /
-      # manual dispatches from main). On PRs — especially from forks —
-      # the token has no `packages: write` and there's nothing to push,
-      # so skip the login entirely.
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          images: ${{ env.IMAGE_PREFIX }}/insight-api-gateway
           tags: |
             type=raw,value=${{ needs.changes.outputs.build_tag }},enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
-
-      # PRs (including forks) build only — verifies the Dockerfile and the
-      # build still works without polluting GHCR. Pushes happen only on
-      # merges to main and on manual dispatches from main.
       - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
-          # Most backend Dockerfiles (Rust services) share src/backend as
-          # build context — they reference the Cargo workspace at the
-          # backend root. The .NET identity service is self-contained
-          # and overrides `matrix.context` to its own folder.
-          context: ${{ matrix.context || 'src/backend' }}
-          file: src/backend/${{ matrix.dockerfile }}
+          context: src/backend
+          file: src/backend/services/api-gateway/Dockerfile
+          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  backend-analytics-api:
+    needs: changes
+    if: needs.changes.outputs.analytics_api == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/insight-analytics-api
+          tags: |
+            type=raw,value=${{ needs.changes.outputs.build_tag }},enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: src/backend
+          file: src/backend/services/analytics-api/Dockerfile
+          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  backend-identity:
+    needs: changes
+    if: needs.changes.outputs.identity == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/insight-identity
+          tags: |
+            type=raw,value=${{ needs.changes.outputs.build_tag }},enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      # .NET 9 identity is self-contained — context is the service folder
+      # itself, not src/backend/ (no Cargo workspace membership).
+      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: src/backend/services/identity
+          file: src/backend/services/identity/Dockerfile
           push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -126,7 +183,7 @@ jobs:
 
   toolbox:
     needs: changes
-    if: needs.changes.outputs.ingestion == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.toolbox == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -251,19 +308,23 @@ jobs:
   # See ADR-0001 (docs/components/deployment/specs/ADR/0001-chart-publishing-on-merge.md)
   # and the gitops SPEC §2.4 for the contract.
   publish-chart:
-    needs: [changes, backend, toolbox, jira-enrich]
+    needs: [changes, backend-api-gateway, backend-analytics-api, backend-identity, toolbox, jira-enrich]
     if: |
       always()
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && github.ref == 'refs/heads/main'
-      && (needs.backend.result == 'success' || needs.backend.result == 'skipped')
-      && (needs.toolbox.result == 'success' || needs.toolbox.result == 'skipped')
-      && (needs.jira-enrich.result == 'success' || needs.jira-enrich.result == 'skipped')
+      && (needs.backend-api-gateway.result   == 'success' || needs.backend-api-gateway.result   == 'skipped')
+      && (needs.backend-analytics-api.result == 'success' || needs.backend-analytics-api.result == 'skipped')
+      && (needs.backend-identity.result      == 'success' || needs.backend-identity.result      == 'skipped')
+      && (needs.toolbox.result               == 'success' || needs.toolbox.result               == 'skipped')
+      && (needs.jira-enrich.result           == 'success' || needs.jira-enrich.result           == 'skipped')
       && (
-        needs.changes.outputs.backend == 'true'
-        || needs.changes.outputs.ingestion == 'true'
+        needs.changes.outputs.api_gateway   == 'true'
+        || needs.changes.outputs.analytics_api == 'true'
+        || needs.changes.outputs.identity   == 'true'
+        || needs.changes.outputs.toolbox     == 'true'
         || needs.changes.outputs.jira_enrich == 'true'
-        || needs.changes.outputs.umbrella == 'true'
+        || needs.changes.outputs.umbrella    == 'true'
       )
     runs-on: ubuntu-latest
     steps:
@@ -295,27 +356,39 @@ jobs:
         with:
           version: '3.14.0'
 
-      - name: Bump subchart appVersions
+      # Per-service subchart appVersion bumps. Each is bumped INDEPENDENTLY,
+      # only if the matching image was rebuilt this run. Services whose
+      # source didn't change keep their previous appVersion → their image
+      # tag in the published chart still resolves to an image that exists.
+      # This is what makes per-service granularity work in the deploy path
+      # (subchart deployment templates default `image.tag` to
+      # `.Chart.AppVersion`, which is the SUBCHART's appVersion, not the
+      # umbrella's).
+      - name: Bump per-service subchart appVersions
         env:
-          BUILD_TAG: ${{ needs.changes.outputs.build_tag }}
-          BACKEND: ${{ needs.changes.outputs.backend }}
+          BUILD_TAG:     ${{ needs.changes.outputs.build_tag }}
+          API_GATEWAY:   ${{ needs.changes.outputs.api_gateway }}
+          ANALYTICS_API: ${{ needs.changes.outputs.analytics_api }}
+          IDENTITY:      ${{ needs.changes.outputs.identity }}
         run: |
           set -euo pipefail
-          if [ "$BACKEND" = "true" ]; then
-            for sub in src/backend/services/api-gateway/helm \
-                      src/backend/services/analytics-api/helm \
-                      src/backend/services/identity/helm; do
-              echo "Bumping $sub/Chart.yaml appVersion → $BUILD_TAG"
-              yq -i ".appVersion = \"$BUILD_TAG\"" "$sub/Chart.yaml"
-            done
-          else
-            echo "No backend rebuilt; skipping subchart appVersion bumps."
+          if [ "$API_GATEWAY" = "true" ]; then
+            echo "Bumping api-gateway subchart appVersion → $BUILD_TAG"
+            yq -i ".appVersion = \"$BUILD_TAG\"" src/backend/services/api-gateway/helm/Chart.yaml
+          fi
+          if [ "$ANALYTICS_API" = "true" ]; then
+            echo "Bumping analytics-api subchart appVersion → $BUILD_TAG"
+            yq -i ".appVersion = \"$BUILD_TAG\"" src/backend/services/analytics-api/helm/Chart.yaml
+          fi
+          if [ "$IDENTITY" = "true" ]; then
+            echo "Bumping identity subchart appVersion → $BUILD_TAG"
+            yq -i ".appVersion = \"$BUILD_TAG\"" src/backend/services/identity/helm/Chart.yaml
           fi
 
       - name: Bump ingestion image refs
         env:
           BUILD_TAG: ${{ needs.changes.outputs.build_tag }}
-          INGESTION: ${{ needs.changes.outputs.ingestion }}
+          TOOLBOX: ${{ needs.changes.outputs.toolbox }}
           JIRA_ENRICH: ${{ needs.changes.outputs.jira_enrich }}
           IMAGE_PREFIX: ${{ env.IMAGE_PREFIX }}
         run: |
@@ -323,7 +396,7 @@ jobs:
           # Ingestion images are pinned in the umbrella values.yaml as full
           # image refs, not as subchart appVersions, because they have no
           # subchart of their own (they run as Argo Workflow steps).
-          if [ "$INGESTION" = "true" ]; then
+          if [ "$TOOLBOX" = "true" ]; then
             REF="$IMAGE_PREFIX/insight-toolbox:$BUILD_TAG"
             echo "Setting ingestion.toolboxImage → $REF"
             yq -i ".ingestion.toolboxImage = \"$REF\"" charts/insight/values.yaml
@@ -334,17 +407,32 @@ jobs:
             yq -i ".ingestion.jiraEnrichImage = \"$REF\"" charts/insight/values.yaml
           fi
 
+      # Umbrella `version` always patch-bumps (semver, per-publish contract).
+      # Umbrella `appVersion` is DISPLAY-ONLY in the deploy path — the actual
+      # image.tag for each pod is resolved inside that pod's subchart from
+      # the SUBCHART's appVersion. We set the umbrella appVersion to the MAX
+      # of the three backend subchart appVersions so it summarises "the
+      # newest image tag bundled in this chart artifact". `sort -V` handles
+      # the YYYY.MM.DD.HH.MM-shortsha format correctly because the date
+      # prefix is lexicographically sortable.
+      #
+      # If no backend subchart advanced this run (e.g. chart-only PR), the
+      # max stays at the previous value — the umbrella appVersion never
+      # races ahead of an image that doesn't exist.
       - name: Bump umbrella version
         id: umbrella
-        env:
-          BUILD_TAG: ${{ needs.changes.outputs.build_tag }}
         run: |
           set -euo pipefail
           CURRENT="$(yq '.version' charts/insight/Chart.yaml)"
           NEXT="$(echo "$CURRENT" | awk -F. '{ printf "%d.%d.%d", $1, $2, $3+1 }')"
-          echo "Umbrella version $CURRENT → $NEXT"
-          yq -i ".version = \"$NEXT\"" charts/insight/Chart.yaml
-          yq -i ".appVersion = \"$BUILD_TAG\"" charts/insight/Chart.yaml
+          NEW_APP=$(yq -r '.appVersion' \
+            src/backend/services/api-gateway/helm/Chart.yaml \
+            src/backend/services/analytics-api/helm/Chart.yaml \
+            src/backend/services/identity/helm/Chart.yaml \
+            | sort -V | tail -1)
+          echo "Umbrella version $CURRENT → $NEXT (appVersion → $NEW_APP)"
+          yq -i ".version = \"$NEXT\""        charts/insight/Chart.yaml
+          yq -i ".appVersion = \"$NEW_APP\""  charts/insight/Chart.yaml
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
 
       - name: Helm dependency update
