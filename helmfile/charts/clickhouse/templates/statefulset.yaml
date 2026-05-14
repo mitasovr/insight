@@ -58,9 +58,12 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/clickhouse
-            - name: init
-              mountPath: /docker-entrypoint-initdb.d
-              readOnly: true
+          # Database provisioning happens out-of-band from the umbrella's
+          # clickhouse-init-svcdbs-job.yaml post-install Hook against
+          # `clickhouse.host` (works for bundled or external). The
+          # previous /docker-entrypoint-initdb.d ConfigMap mount only
+          # covered the bundled mode and was removed for consistency
+          # with the cross-mode Hook.
           # CH `/ping` can exceed the k8s default `timeoutSeconds: 1` under
           # sustained bulk-insert load (initial Airbyte backfill, large
           # connector syncs, dbt full-refresh). Defaults here give CH
@@ -86,10 +89,6 @@ spec:
             periodSeconds:       {{ .Values.readinessProbe.periodSeconds       | default 10 }}
             timeoutSeconds:      {{ .Values.readinessProbe.timeoutSeconds      | default 3  }}
             failureThreshold:    {{ .Values.readinessProbe.failureThreshold    | default 3  }}
-      volumes:
-        - name: init
-          configMap:
-            name: {{ include "clickhouse.fullname" . }}-init
   volumeClaimTemplates:
     - metadata:
         name: data
