@@ -107,10 +107,14 @@ spec:
 
               echo "Provisioning per-service databases..."
               {{- range .Values.clickhouse.initDatabases }}
+              # ClickHouse HTTP API: SQL goes in the POST body verbatim
+              # (--data-binary). The earlier --data-urlencode 'query=...'
+              # form-encoded the body as `query=CREATE+...`, which the
+              # server then tried to parse as SQL — Code 62 syntax error.
               curl -sS --fail-with-body \
                 -u "${CH_USER}:${CH_PASSWORD}" \
-                "http://${CH_HOST}:${CH_PORT}/" \
-                --data-urlencode 'query=CREATE DATABASE IF NOT EXISTS `{{ . }}`'
+                --data-binary 'CREATE DATABASE IF NOT EXISTS `{{ . }}`' \
+                "http://${CH_HOST}:${CH_PORT}/"
               echo "Provisioned {{ . }}."
               {{- end }}
               echo "Done."
