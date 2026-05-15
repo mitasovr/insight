@@ -167,6 +167,17 @@ already returns a list, so the contract does not change; only the
 list length grows. No source today produces this, so the change is
 not in Phase 1 scope.
 
+**Cycle detection — two-hop, warn-not-fail.** After the rebuild
+swap, the seeder counts pairs of CURRENT edges `(A -> B)` and
+`(B -> A)` on the same `(tenant, source_type, source_id)` partition
+via a self-join over `valid_to IS NULL` rows. A non-zero count
+emits a `WARN` line in the seeder log but does NOT fail the
+pipeline — a single bad row in HR data should not block the
+remaining edges. Deeper cycles (`A -> B -> C -> A`) are not
+detected here; the Phase-3 `/v1/subchart/{person_id}?depth=N`
+endpoint will bound recursion by `depth` so unbounded walks
+become structurally impossible regardless of source data quality.
+
 Schema (`Migrations/003_person_parent_map.sql`):
 
 ```sql

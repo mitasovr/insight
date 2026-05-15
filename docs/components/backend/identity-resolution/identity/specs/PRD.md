@@ -436,6 +436,14 @@ types in step 5 (person_id assignment) so the canonical
 `supervisorEmail` source establishes `person_id`s before downstream
 connectors share emails with it.
 
+After the swap, the seeder **MUST** count two-hop cycles among
+CURRENT edges (`valid_to IS NULL`) — pairs `(A->B)` and `(B->A)` on
+the same `(tenant, source_type, source_id)` — and **MUST** emit a
+WARN line when the count is non-zero, without failing the pipeline.
+Deeper cycles (A->B->C->A) are not detected in Phase 1; the Phase-3
+`/v1/subchart/{person_id}?depth=N` recursive CTE bounds traversal
+by `depth` to make those harmless to consumers.
+
 **Rationale**: Append-only `persons` with latest-per-partition makes
 the rebuild deterministic; symmetry with `account_person_map` lets
 operators reason about both caches the same way. The two-source
