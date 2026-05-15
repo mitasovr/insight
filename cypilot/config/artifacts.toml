@@ -643,6 +643,11 @@ kind = "ADR"
 path = "docs/components/backend/identity-resolution/identity/specs/ADR/0008-bamboohr-identity-inputs-extension.md"
 name = "ADR-0008: Extend BambooHR identity_inputs With Person Attributes"
 
+[[systems.artifacts]]
+kind = "ADR"
+path = "docs/components/backend/identity-resolution/identity/specs/ADR/0010-person-parent-map-cache.md"
+name = "ADR-0010: Materialized SCD2 Cache for Person Parent/Child Edges"
+
 [[systems]]
 name = "Orchestrator"
 slug = "orch"
