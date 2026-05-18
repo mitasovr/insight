@@ -65,6 +65,7 @@ Every emitted record includes `tenant_id`, `source_id`, and `unique_key` (patter
 | `cpt-insightspec-fr-conf-space-extraction` | `DeclarativeStream wiki_spaces` via `GET /wiki/api/v2/spaces`; full refresh; writes to `wiki_spaces` |
 | `cpt-insightspec-fr-conf-page-extraction` | `DeclarativeStream wiki_pages` via `GET /wiki/api/v2/pages?sort=-modified-date&status=current,archived,trashed`; incremental via `DatetimeBasedCursor` on `version.createdAt` with `is_client_side_incremental: true`; writes to `wiki_pages`. **API correction**: `lastModifiedAfter` does NOT exist on this endpoint — client-side cursor used instead |
 | `cpt-insightspec-fr-conf-edit-activity` | `DeclarativeStream wiki_page_versions` as substream of `wiki_pages` via `SubstreamPartitionRouter`; fetches `GET /wiki/api/v2/pages/{page_id}/versions`; writes raw version records. **Deferred**: expansion to `wiki_page_activity` (one row per edit per user per day) happens in Silver/dbt, not at connector level |
+| `cpt-insightspec-fr-conf-comment-extraction` | Four `DeclarativeStream`s (`wiki_footer_comments`, `wiki_footer_comment_replies`, `wiki_inline_comments`, `wiki_inline_comment_replies`) — top-level streams are substreams of `wiki_pages`; reply streams are substreams of their respective top-level streams (2-level `SubstreamPartitionRouter` chain). The page-level listing endpoints `/pages/{id}/footer-comments` and `/pages/{id}/inline-comments` return ONLY top-level comments — replies require a separate `/{kind}-comments/{id}/children` call per top-level comment. Silver fans these out into `class_wiki_engagement` (per-page-day engagement KPIs); see §3.7. Issue #285. |
 | `cpt-insightspec-fr-conf-view-analytics` | **Deferred to Phase 2**. Analytics endpoints live under v1 (`/wiki/rest/api/analytics/...`), not v2. Per-page iteration is expensive. `view_count` and `distinct_viewers` are NULL in Phase 1 |
 | `cpt-insightspec-fr-conf-email-resolution` | **Deferred to Silver/dbt**. Connector emits `accountId` only; email resolved via JOIN with `jira_user` (same Atlassian `accountId`). Phase 2: dedicated `/wiki/rest/api/user/bulk` resolution (max 100 IDs per request, not 200 as PRD states) |
 | `cpt-insightspec-fr-conf-deduplication` | Upsert keyed on natural PKs per table; `ReplacingMergeTree(_airbyte_extracted_at)` at storage level (framework-managed) |
@@ -93,12 +94,18 @@ Every emitted record includes `tenant_id`, `source_id`, and `unique_key` (patter
 |  Confluence Connector (Airbyte DeclarativeSource YAML manifest)           |
 |  +-- wiki_spaces stream (full refresh, GET /wiki/api/v2/spaces)           |
 |  +-- wiki_pages stream (incremental, GET /wiki/api/v2/pages)              |
-|  |   +-- wiki_page_versions substream (per-page /versions)                |
+|      +-- wiki_page_versions substream (per-page /versions)                |
+|      +-- wiki_footer_comments substream (per-page /footer-comments)       |
+|      |   +-- wiki_footer_comment_replies (per-comment /children)          |
+|      +-- wiki_inline_comments substream (per-page /inline-comments)       |
+|          +-- wiki_inline_comment_replies (per-comment /children)          |
 +-------------------------------------+-------------------------------------+
                                       | Airbyte Protocol (RECORD, STATE, LOG)
 +-------------------------------------v-------------------------------------+
 |  Bronze Tables (ClickHouse - ReplacingMergeTree)                          |
-|  wiki_spaces, wiki_pages, wiki_page_versions                              |
+|  wiki_spaces, wiki_pages, wiki_page_versions,                             |
+|  wiki_footer_comments, wiki_footer_comment_replies,                       |
+|  wiki_inline_comments, wiki_inline_comment_replies                        |
 |  (all with data_source = 'insight_confluence')                            |
 +---------------------------------------------------------------------------+
 ```
@@ -218,11 +225,11 @@ The single declarative YAML manifest (`connector.yaml`) defines all streams, aut
 
 ##### Responsibility scope
 
-- Defines all stream configurations: `wiki_spaces`, `wiki_pages`, `wiki_page_versions`.
+- Defines all stream configurations: `wiki_spaces`, `wiki_pages`, `wiki_page_versions`, `wiki_footer_comments`, `wiki_footer_comment_replies`, `wiki_inline_comments`, `wiki_inline_comment_replies`.
 - Configures `BasicHttpAuthenticator` with Basic Auth (`email:api_token` base64-encoded).
 - Configures `CursorPagination` for all v2 endpoints (cursor-based via `_links.next`).
 - Configures `DatetimeBasedCursor` on `updated_at` field (mapped from `version.createdAt`) for incremental sync with `is_client_side_incremental: true`.
-- Configures `SubstreamPartitionRouter` for `wiki_page_versions` (parent-child stream pattern per page).
+- Configures `SubstreamPartitionRouter` for parent-child stream patterns: `wiki_page_versions` and the two top-level comment streams hang off `wiki_pages`; the two reply streams hang off their respective top-level comment streams (2-level chain).
 - Configures `AddFields` transformations for `tenant_id`, `source_id`, `unique_key`, and `data_source` injection on every record.
 - Defines the connection specification (config schema) in the `spec` section.
 
@@ -349,7 +356,11 @@ Extracts user identity attributes from Confluence Cloud API page and version obj
 | Airbyte declarative manifest runtime | `DeclarativeSource`, stream definitions, `AirbyteMessage` | Connector framework |
 | `descriptor.yaml` | Connector descriptor: `schedule`, `workflow`, `dbt_select`, `connection.namespace` | Package registration per Connector Framework §4.10 |
 
-> **Phase 1 dbt scope**: `descriptor.yaml` ships with `dbt_select: ""` and `silver_targets: []`. Silver models for `class_wiki_pages` and `class_wiki_activity` are deferred to Phase 2 (see §3.7 note on `wiki_page_activity`). `dbt/schema.yml` contains Bronze source declarations only — no staging or Silver models. The Argo `dbt` step is therefore a deliberate no-op until Phase 2 lands Silver routing.
+> **dbt scope**: `descriptor.yaml` ships with `dbt_select: "tag:confluence+"`. Staging models `confluence__wiki_pages` and `confluence__wiki_activity` live in `connectors/wiki/confluence/dbt/` and feed the Silver classes `class_wiki_pages` and `class_wiki_activity` via `union_by_tag('silver:class_wiki_*')`. `silver_targets` is omitted per Connector Spec §4.10 — Silver routing is determined entirely by dbt tags on the staging models.
+>
+> **Edit-session collapse in `confluence__wiki_activity`** (issue #259): Confluence creates a new `wiki_page_versions` row on every save (autosaves, rapid republishes, plugin-driven saves). A naive `count()` over versions therefore systematically overstates editing activity — a single 8-hour editing session of one page can produce 27 version rows. The staging model collapses consecutive versions of the same `(tenant, source, page, author)` whose inter-version gap is ≤ 30 minutes into a single logical edit session and counts those instead: `total_edits = uniqExact((page_id, session_id))`. The 30-minute threshold is a conservative compromise — long enough to absorb autosave bursts and short coffee breaks, short enough to keep morning-vs-evening edits separate. The threshold is a top-of-file Jinja constant (`session_gap_seconds`) and easy to tune. `pages_edited` and `pages_created` are not affected (they already count distinct pages / `version_number = 1`, neither of which is inflated by burst saves).
+>
+> **`minor_edit` deprecated** (issue #260): the upstream `wiki_page_versions.minor_edit` column is preserved for forward compatibility but is a known dead signal at the Atlassian Cloud API level — `/pages/{id}/versions` always returns `minorEdit: false` regardless of how the flag was set on PUT (verified empirically against both v2 and v1 listing endpoints, 2026-05-05). The Silver columns `class_wiki_activity.major_edits` / `class_wiki_activity.minor_edits` and the `confluence__wiki_activity` staging emissions for them were therefore dropped. The bronze field is left in place so that, if Atlassian fixes the API in the future, re-introducing the silver columns is a non-breaking additive change.
 
 **Dependency Rules**:
 - No circular dependencies between streams.
@@ -483,6 +494,10 @@ All Bronze table schemas are defined in [`confluence.md`](../confluence.md) and 
 | `wiki_spaces` | `[unique_key]` | `{tenant_id}-{source_id}-{space_id}` | Full refresh each run |
 | `wiki_pages` | `[unique_key]` | `{tenant_id}-{source_id}-{page_id}` | `updated_at` (from `version.createdAt`) — incremental via client-side cursor |
 | `wiki_page_versions` | `[unique_key]` | `{tenant_id}-{source_id}-{page_id}-{version_number}` | Child of `wiki_pages` — scoped by parent page set |
+| `wiki_footer_comments` | `[unique_key]` | `{tenant_id}-{source_id}-{comment_id}` | Child of `wiki_pages` — full refresh per page (#285) |
+| `wiki_footer_comment_replies` | `[unique_key]` | `{tenant_id}-{source_id}-{comment_id}` | Child of `wiki_footer_comments` — full refresh per top-level comment |
+| `wiki_inline_comments` | `[unique_key]` | `{tenant_id}-{source_id}-{comment_id}` | Child of `wiki_pages` — full refresh per page |
+| `wiki_inline_comment_replies` | `[unique_key]` | `{tenant_id}-{source_id}-{comment_id}` | Child of `wiki_inline_comments` — full refresh per top-level comment |
 
 All tables are created by the Airbyte ClickHouse destination as `ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key`. Airbyte's destination framework auto-generates `_airbyte_extracted_at` (DateTime64) on every row and uses it as the version column — no custom `_version` field is injected by the manifest. This matches the project-wide convention (jira, zoom, and the AI connectors all rely on the same framework-managed deduplication). Additional framework-generated columns present at runtime: `_airbyte_raw_id`, `_airbyte_meta`, `_airbyte_generation_id`.
 
@@ -491,6 +506,12 @@ All tables are created by the Airbyte ClickHouse destination as `ReplacingMergeT
 > **Note on `wiki_page_activity`**: The PRD defines a `wiki_page_activity` table with per-user per-day edit and view counts. In Phase 1, this table is NOT populated by the connector. Raw version records are stored in `wiki_page_versions`; expansion to `wiki_page_activity` (one row per edit per user per day) is deferred to Silver/dbt. View activity (analytics) is deferred to Phase 2.
 >
 > **Note on `confluence_collection_runs`**: Sync monitoring is handled by the Airbyte platform sync logs in Phase 1. The connector-specific `confluence_collection_runs` table is not implemented at the connector level.
+>
+> **Note on comment streams (#285)**: All four comment tables share a common base schema (`comment_id`, `page_id`, `author_id`, `created_at` from `version.createdAt`, `body_storage` raw HTML from `body.storage.value`, `collected_at` + framework fields). Top-level streams (`wiki_footer_comments`, `wiki_inline_comments`) additionally carry `resolution_status` (`open` / `resolved` / null). Inline top-level adds `inline_marker_ref` (UUID anchor in the page) and `inline_original_selection` (the highlighted text fragment at comment-creation time). Reply streams add `parent_comment_id` (always populated for replies; replies never appear in the top-level streams). Replies do NOT carry resolution status or inline anchor data — those are properties of the parent thread. The page-level listing endpoints `/pages/{id}/footer-comments` and `/pages/{id}/inline-comments` return only top-level comments (verified empirically against `darthvolt.atlassian.net`, 2026-05-07; `?depth=all` does not surface replies); replies are fetched via `/{kind}-comments/{id}/children` per top-level. All four streams use full refresh — the v2 endpoints don't accept an `updated-after` filter and comment volumes are small.
+>
+> **`body_storage` retention rationale**: `class_wiki_engagement` does not currently consume the comment body — engagement aggregates are pure counts. The raw HTML is retained in Bronze on purpose: re-extracting bodies later (for text-mining, sentiment analysis, mention extraction, or "page summarisation by comment thread" use cases) would require a full re-sync since the v2 API has no `?include=body` toggle on the listing endpoints. Bronze storage is cheap relative to a re-extract; we keep the body and let downstream decide.
+>
+> **`created_at` semantics**: All four comment streams stamp `version.createdAt` (the **latest** version of the comment), not the comment's original creation timestamp. The Confluence v2 API does not expose a separate root `createdAt` for comments. As a consequence, `class_wiki_engagement.day` reflects "last activity day" — an edit on day N+5 of a comment originally posted on day N moves the row from bucket day-N to bucket day-(N+5) on the next sync. For most engagement use cases this is acceptable (the metric still answers "is this page being engaged with"); if a stable creation-day metric is needed, derive it in a future iteration by joining against earlier syncs in `_airbyte_extracted_at` history.
 
 ---
 
@@ -620,7 +641,7 @@ The following corrections to the PRD assumptions were identified during API vali
 | `author_id` | `authorId` | `accountId` of version author |
 | `created_at` | `createdAt` | ISO 8601; UTC |
 | `message` | `message` | Version message / commit note |
-| `minor_edit` | `minorEdit` | Boolean indicating minor edit |
+| `minor_edit` | `minorEdit` | **DEPRECATED (#260).** Boolean indicating minor edit. Read from the API and persisted to Bronze for forward compatibility, but the Confluence Cloud `/pages/{id}/versions` endpoint always returns `minorEdit: false` regardless of how the flag was set on PUT (verified empirically 2026-05-05 on `darthvolt.atlassian.net` against both v2 and v1 listing endpoints). Silver staging ignores this column; the dependent `class_wiki_activity.major_edits` and `class_wiki_activity.minor_edits` were removed in #260. |
 | `collected_at` | emission time | `now()` at record emission |
 | `data_source` | `insight_confluence` | Injected via `AddFields` |
 | `tenant_id` | config | Injected via `AddFields` |
@@ -688,7 +709,6 @@ Same chain applies to `wiki_pages.last_editor_id` and `wiki_page_versions.author
 | No `confluence_collection_runs` table | Sync monitoring via Airbyte platform only | Custom run tracking if needed beyond Airbyte platform capabilities |
 | No `wiki_users` stream | wiki_users stream NOT implemented in Phase 1. Confluence v2 API has no batch user lookup or list-all-users endpoint suitable for declarative manifests. User identity resolution happens in Silver via JOIN with `jira_user` (shared Atlassian accountId namespace) | Phase 2: User API bulk resolution via `GET /wiki/rest/api/user/bulk`; Silver: JOIN with `jira_user` |
 | No blog post extraction | Blog posts (`GET /blogposts`) excluded from scope | Future v1.1 extension using same schema |
-| No page comments | Footer and inline comments excluded from scope | Future iteration via `GET /pages/{id}/footer-comments` |
 | No space filtering on pages endpoint | `confluence_space_keys` config field removed from Phase 1 -- declared but never referenced by any stream. All visible spaces are synced | Re-introduce in future iteration if per-space page requests are implemented |
 | URN-based surrogate key not implemented | Not generated at connector level | Deferred to Silver/dbt or future connector iteration |
 | `confluence_start_date` config deviation | `confluence_start_date` config field deviates from Connector Framework SS4.4 (which says start dates should be computed, not configured). This is intentional: Confluence v2 API has no `lastModifiedAfter` parameter, so client-side incremental filtering relies on a configurable start date for the initial sync. Subsequent runs use Airbyte STATE | N/A -- intentional deviation |

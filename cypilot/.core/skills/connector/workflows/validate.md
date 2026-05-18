@@ -7,7 +7,54 @@ description: "Validate an Insight Connector package against spec"
 
 Checks that a connector package meets all requirements from the connector spec.
 
-## Checklist
+## Step 1: Automated structural validation (MANDATORY)
+
+Before the checklist review, always run the automated validators:
+
+```bash
+./src/ingestion/tools/declarative-connector/source.sh validate-strict <category>/<name>
+./src/ingestion/tools/declarative-connector/source.sh validate        <category>/<name>
+```
+
+- `validate-strict` — runs the Airbyte Builder UI JSON-schema check (no `$ref` resolution). This is the definitive compat test for the Builder UI. Must exit 0.
+- `validate` — runs the CDK loader check (resolves `$ref` first). Lenient; must also exit 0.
+
+If either fails, fix the reported per-path errors before proceeding with the checklist. See `src/ingestion/tools/declarative-connector/README.md` §"Debugging strict-validation errors".
+
+## Step 2: Builder-UI compatibility checklist (manifest-only)
+
+If `validate-strict` passed, these are already satisfied automatically — but eyeball them when reviewing a PR to catch intent mistakes:
+
+- [ ] No whole-object `$ref` to `#/definitions/<X>` or `#/streams/<N>`. Only leaf-field `$ref` into `#/definitions/linked/<Component>/<field>` is allowed.
+- [ ] Every `AddFields.fields[]` item has `type: AddedFieldDefinition`.
+- [ ] `concurrency_level.default_concurrency` is a literal integer.
+- [ ] `page_size` in `OffsetIncrement` / `CursorPagination` is either a literal integer OR a Jinja template like `"{{ config.get('x_page_size', 100) }}"` (both forms are accepted by the CDK and the Builder UI). Wire declared `*_page_size` config keys via the templated form so operator overrides take effect.
+- [ ] Schema `$schema` is `http://json-schema.org/schema#` (not draft-07).
+- [ ] Schema type arrays are `[type, "null"]`, not `["null", type]`.
+- [ ] `check` block is present and placed BEFORE `definitions`.
+- [ ] `version`, `type: DeclarativeSource`, `concurrency_level`, `metadata.autoImportSchema` present.
+- [ ] Did NOT copy from `task-tracking/jira` (jira uses whole-object `$ref`; it is a known anti-template).
+
+## Step 2b: Runtime-only pitfalls (checked by per-stream `read`, MANDATORY)
+
+`validate-strict` does not catch these — only a live `read` against a real tenant does. Fail the connector review if any of these are present:
+
+- [ ] `DatetimeBasedCursor` with `step` also has matching `cursor_granularity`. Missing `cursor_granularity` → CDK raises `ValueError: If step is defined, cursor_granularity should be as well`.
+- [ ] No `format_datetime(...)` call inside an `AddedFieldDefinition.value` used as a cursor source. That Jinja expression may not render, leaving the literal template as the cursor value. Use native `%ms` / `%s` / `%s_as_float` / `%epoch_microseconds` in `cursor_datetime_formats` to parse epoch values directly from the source field.
+- [ ] Every `record.get('X', {}).get('Y')` chain is replaced with `(record.get('X') or {}).get('Y')`. The `.get(key, default)` default only applies when the key is **missing**; it does NOT apply when the key is present with `null` value, and `None.get(...)` crashes the whole slice.
+- [ ] Source API query syntax has been verified against a real tenant via `source.sh check`. YouTrack, Jira JQL, Salesforce SOQL each have distinct datetime and operator dialects — template substitution can produce syntactically valid but semantically wrong queries that `validate-strict` cannot detect.
+
+## Step 2c: Per-stream `read` smoke test (MANDATORY)
+
+Run the per-stream `read` loop from `connector-create.md` §5.6 and verify, for every stream:
+
+- [ ] First-read record count > 0 (unless the source truly has no data).
+- [ ] Error count = 0 in both first read and resume read (any `ERROR` / `FATAL` in the log is a blocker).
+- [ ] Every emitted record contains `tenant_id`, `source_id`, `unique_key`.
+- [ ] For substreams, the parent_key/partition_field uses the parent's stable internal id (e.g. `youtrack_id` from `record['id']`), NOT a nullable human-readable field like `id_readable` from `record.get('idReadable')` — a `null` value silently routes to `.../None/<endpoint>` which 404s and drops the slice.
+- [ ] For incremental streams, a **resume read** (second run after capturing the emitted `STATE` message from stdout and writing it to `state.json`) returns a strict subset of the first-read records — usually zero. The skill's smoke-test script in `connector-create.md` §5.6 does this capture + persist + resume automatically. A naive "second consecutive read" without persisting state cannot validate cursor advancement (`source.sh read` writes Airbyte Protocol JSON to stdout but does not update `state.json` itself).
+
+## Step 3: Spec-level checklist
 
 Read connector package files and verify each item:
 
@@ -62,6 +109,42 @@ Read connector package files and verify each item:
 - [ ] Model has `tenant_id` with not_null test
 - [ ] Model has `source_id` with not_null test
 - [ ] Model has `unique_key` with not_null and unique tests
+
+### Bronze Promotion (`promote_bronze_to_rmt`)
+
+Airbyte writes bronze tables as plain `MergeTree`, so full-refresh streams accumulate duplicates across syncs. Every connector with a `dbt/` directory MUST migrate its bronze tables to `ReplacingMergeTree` via the `promote_bronze_to_rmt` macro (see `dbt/macros/promote_bronze_to_rmt.sql`). The bootstrap view MUST run BEFORE all other transformations.
+
+- [ ] `dbt/<connector_snake>__bronze_promoted.sql` exists (where `<connector_snake>` is the connector name with hyphens converted to underscores, e.g. `bitbucket_cloud`, `ms_entra`, `claude_enterprise`)
+- [ ] The bootstrap model is `materialized='view'`, uses `schema='staging'`, and tags the connector name (`tags=['<name>']`)
+- [ ] For every Airbyte stream the connector emits, there is a `{% do promote_bronze_to_rmt(table='bronze_<name_snake>.<stream>', order_by='unique_key') %}` line
+- [ ] No spurious `promote_bronze_to_rmt` calls reference streams that don't exist in the manifest / source
+- [ ] Every other dbt model in `dbt/` that reads from `source('bronze_<name_snake>', '...')` declares the bronze_promoted dependency as the FIRST non-blank line above the `config` block:
+  ```jinja
+  -- depends_on: {{ ref('<connector_snake>__bronze_promoted') }}
+  ```
+  This makes dbt's DAG materialise the bootstrap view before any model that reads bronze.
+
+Run the deterministic checker:
+
+```bash
+./airbyte-toolkit/validate-bronze-promoted.py <category>/<connector>
+# or for a CI-friendly summary across the whole repo:
+./airbyte-toolkit/validate-bronze-promoted.py --all --json
+```
+
+Exit 0 = PASS for the targeted connector(s); exit 2 = at least one FAIL. Rule IDs:
+
+| Rule | What it checks |
+|------|----------------|
+| `BP-1` | `<name>__bronze_promoted.sql` file exists |
+| `BP-2` | bootstrap is `materialized='view'` |
+| `BP-3` | bootstrap uses `schema='staging'` |
+| `BP-4` | bootstrap tags include connector name |
+| `BP-5` | every stream has a `promote_bronze_to_rmt(table='bronze_<name>.<stream>')` call |
+| `BP-6` | no `promote_bronze_to_rmt` call references an unknown stream (WARN) |
+| `BP-7` | `promote_bronze_to_rmt` calls target the connector's own bronze namespace |
+| `BP-8` | every `promote_bronze_to_rmt` call passes `order_by` |
+| `BP-9` | every other model that reads bronze depends on `<name>__bronze_promoted` |
 
 ### Credentials Template
 - [ ] `credentials.yaml.example` lists all required fields

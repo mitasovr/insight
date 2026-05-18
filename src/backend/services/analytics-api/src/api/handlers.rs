@@ -253,15 +253,15 @@ pub async fn query_metric(
     // The engine always controls FROM and WHERE — insight_tenant_id is
     // always injected for tenant isolation. Admins never control WHERE.
     //
-    // Person ID resolution: if identity_resolution_url is configured,
-    // person_ids from $filter would be resolved to source aliases via
-    // the Identity Resolution API. For MVP, the service is not deployed —
-    // person_ids from the JWT subject_id are used directly against
-    // ClickHouse (Gold tables already have resolved person_id columns).
+    // Person ID resolution: if identity_url is configured, person_ids from
+    // $filter would be resolved to source aliases via the Identity API.
+    // For MVP, the service is not deployed — person_ids from the JWT
+    // subject_id are used directly against ClickHouse (Gold tables already
+    // have resolved person_id columns).
     //
     // TODO: Full implementation should also:
     // - Validate org_unit_id from $filter against AccessScope (IDOR prevention)
-    // - Resolve person_ids when identity_resolution_url is set
+    // - Resolve person_ids when identity_url is set
     // - Parse $select to restrict returned columns
     // - Implement cursor-based pagination (decode $skip → keyset)
 

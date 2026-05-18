@@ -722,7 +722,7 @@ Identity-attribute observation history for persons, stored in MariaDB. Each row 
 
 **Database**: MariaDB, database `identity` — dedicated to identity-resolution-domain tables, reached via the service's `database_url` configuration. The service does not assume co-location with any other MariaDB database; any other service owning MariaDB tables configures its own connection independently. Each backend service owns and applies its own schema — see [ADR-0006](../../ingestion/specs/ADR/0006-service-owned-migrations.md).
 
-**DDL**: `src/backend/services/identity/src/migration/m20260421_000001_persons.rs` (SeaORM migration, raw SQL body)
+**DDL**: `src/backend/services/identity/src/Insight.Identity.Infrastructure/Migrations/001_persons.sql` (applied at service startup via DbUp)
 
 ##### Columns
 
@@ -789,7 +789,7 @@ Row 120 supersedes row 5 as the current `display_name` for person `p-1001` (late
 
 **SCD2 materialized cache** of the source-account → `person_id` binding, derived deterministically from `persons` rows where `value_type='id'`. Never the source of truth; rebuilt from scratch at the end of every seed run (and by future operator flows). Exists purely for fast lookup and temporal "as of date T" queries — equivalent to a window-function scan over `persons.value_type='id'`, but O(1)–O(rows-in-tenant) instead of O(observations-in-tenant).
 
-**Database**: MariaDB, database `identity` (same as `persons`). Defined in the same SeaORM migration: `src/backend/services/identity/src/migration/m20260421_000001_persons.rs`.
+**Database**: MariaDB, database `identity` (same as `persons`). Defined in `src/backend/services/identity/src/Insight.Identity.Infrastructure/Migrations/002_account_person_map.sql` (applied at service startup via DbUp).
 
 ##### Columns
 
@@ -862,16 +862,15 @@ See ADR-0002 for the full decision record (why a derived cache instead of a seco
 - The Python script is **independently runnable** — set `CLICKHOUSE_*` and `MARIADB_URL` env vars, ensure the DDL is already applied (by the identity-resolution service startup / `migrate` subcommand), and run `python3 seed-persons-from-identity-input.py`. Used by CI, by non-Kind environments, and for dry runs.
 - The Python script is **testable in isolation** — the ClickHouse HTTP call and the pymysql connection are the only external dependencies and are trivially mockable; bash is not.
 
-**Schema ownership**: the `persons` table DDL lives inside the
-identity-resolution Rust service at
-`src/backend/services/identity/src/migration/m20260421_000001_persons.rs`
-and is applied by the service's own SeaORM `Migrator` at startup
-(a helm `initContainer` also runs `identity-resolution migrate`
-before the main container starts). See
+**Schema ownership**: the `persons` and `account_person_map` table DDL
+lives inside the identity service at
+`src/backend/services/identity/src/Insight.Identity.Infrastructure/Migrations/`
+(`001_persons.sql`, `002_account_person_map.sql`) and is applied by the
+service's own DbUp migrator at startup. See
 [ADR-0006](../../ingestion/specs/ADR/0006-service-owned-migrations.md)
-for the service-owned-migrations policy. The seed scripts here
-operate on the already-created table; they never issue `CREATE`,
-`ALTER`, `TRUNCATE`, or `DELETE`.
+for the service-owned-migrations policy. The seed scripts here operate
+on the already-created tables; they never issue `CREATE`, `ALTER`,
+`TRUNCATE`, or `DELETE`.
 
 **Process** (data flow executed by the Python script):
 

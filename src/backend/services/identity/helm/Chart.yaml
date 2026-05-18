@@ -1,6 +1,6 @@
 apiVersion: v2
-name: insight-identity-resolution
-description: Identity Resolution stub — person lookup from BambooHR
+name: insight-identity
+description: Identity Resolution — .NET 9 person-lookup API over MariaDB persons table
 version: 0.1.0
-appVersion: "0.1.0"
+appVersion: "2026.05.14.09.08-6babdf9"
 type: application

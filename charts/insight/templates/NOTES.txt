@@ -18,10 +18,10 @@ Application services (always-on):
   ✓ API Gateway        http://{{ include "insight.apiGateway.host" . }}:8080
   ✓ Analytics API      http://{{ include "insight.analyticsApi.host" . }}:8081
   ✓ Frontend           http://{{ include "insight.frontend.host" . }}:80
-{{- if .Values.identityResolution.deploy }}
-  ✓ Identity Res.      http://{{ include "insight.identityResolution.host" . }}:8082  (deployed)
+{{- if .Values.identity.deploy }}
+  ✓ Identity           http://{{ include "insight.identity.host" . }}:8082  (deployed)
 {{- else }}
-  · Identity Res.      not deployed (requires BambooHR sync; enable via identityResolution.deploy=true)
+  · Identity           not deployed (requires a populated `persons` table; enable via identity.deploy=true)
 {{- end }}
 {{- if .Values.ingestion.templates.enabled }}
   ✓ Ingestion templates: airbyte-sync, dbt-run, ingestion-pipeline

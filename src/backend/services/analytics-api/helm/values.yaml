@@ -21,7 +21,7 @@ resources:
 
 # Pre-provisioned Secret with the full analytics-api configuration:
 #   ANALYTICS__database_url, ANALYTICS__clickhouse_*, ANALYTICS__redis_url,
-#   ANALYTICS__identity_resolution_url, ANALYTICS__bind_addr.
+#   ANALYTICS__identity_url, ANALYTICS__bind_addr.
 # The umbrella populates `insight-analytics-api-config` automatically; for
 # standalone installs the operator pre-creates an equivalent Secret and
 # sets `existingSecret` to its name.

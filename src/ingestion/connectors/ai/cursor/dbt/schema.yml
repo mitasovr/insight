@@ -58,8 +58,6 @@ models:
         description: "totalTabsShown"
       - name: tool_use_accepted
         description: "totalTabsAccepted"
-      - name: completions_count
-        description: "totalTabsAccepted (duplicate of tool_use_accepted for Cursor)"
       - name: agent_sessions
         description: "agentRequests"
       - name: chat_requests

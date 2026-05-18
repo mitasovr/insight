@@ -6,11 +6,6 @@
 
 replicaCount: 1
 
-# Identity Resolution is not deployed for MVP.
-# Empty URL = person_ids used directly against ClickHouse (no alias resolution).
-identityResolution:
-  url: ""
-
 resources:
   requests:
     cpu: 100m

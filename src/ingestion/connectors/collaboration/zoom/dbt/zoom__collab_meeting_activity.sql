@@ -22,18 +22,55 @@
 --
 -- Meeting-session stitching (issue #258): the (tenant, source, uuid) →
 -- logical_meeting_id mapping is computed in the upstream
--- `zoom__meeting_sessions` model (per CR on PR #284, so this model can
--- stay `materialized='incremental'` per DESIGN.md §3.7). We join FINAL
--- to get the latest cluster assignment per uuid; `meetings_attended`
--- then counts distinct logical meetings instead of distinct sessions,
+-- `zoom__meeting_sessions` model (per CR on PR #284/#479, so this model
+-- can stay `materialized='incremental'` per DESIGN.md §3.7). We join FINAL
+-- to get the latest cluster assignment per uuid; `meetings_attended` then
+-- counts distinct logical meetings instead of distinct sessions,
 -- collapsing host-drop rejoins. See the header of zoom__meeting_sessions
 -- for threshold rationale and NULL-end_ts handling.
 --
--- Durations (`audio_duration_seconds`, `video_duration_seconds`,
--- `screen_share_duration_seconds`) are NOT affected by stitching — they
--- sum real per-participant join/leave intervals, which are correct to
--- add across split sessions (the user really was in-call during both
--- halves).
+-- Duration semantics (issue #263 — tradeoff):
+--
+-- M365's getTeamsUserActivityUserDetail report exposes true minute-of-video
+-- and minute-of-screenshare per user per day. Zoom does NOT — no Dashboard /
+-- Reports endpoint we can call here returns per-participant video duration.
+-- The participant payload we have in bronze carries only "did this user use
+-- video / share at all during the session" signals:
+--
+--   p.camera             Nullable(String)  -- camera device name. NULL/'' when
+--                                             no camera was used (mic-only join).
+--                                             Empirically ≈26% non-NULL — the
+--                                             real "user had video on" signal.
+--                                             Caveat: `p.video_connection_type`
+--                                             is the network transport (Reliable
+--                                             UDP / P2P / TCP / ...) and is
+--                                             populated for ~99% of rows — it
+--                                             is NOT a camera-on flag.
+--   p.share_desktop      Nullable(Bool)
+--   p.share_application  Nullable(Bool)
+--   p.share_whiteboard   Nullable(Bool)
+--
+-- We use those signals to gate the session length, so a participant who
+-- never turned on the camera contributes video_duration_seconds=0
+-- (matching the Teams semantics directionally). We deliberately DO NOT
+-- use the `has_video` / `has_screen_share` flags carried through
+-- `zoom__meeting_sessions` — those are MEETING-level (any participant
+-- ever turned on video) and would count the full session for every
+-- attendee of a meeting where someone else had video.
+--
+-- Known limitation that this fix does NOT eliminate: if a Zoom
+-- participant turned the camera on for one minute and then off for the
+-- remaining 59, their `camera` device name is still populated for the
+-- session and their full session length is attributed to
+-- `video_duration_seconds`. Zoom rows therefore still OVER-ESTIMATE
+-- video / screen-share duration vs the true minute-of-X numbers M365
+-- produces. Cross-vendor aggregates that sum `video_duration_seconds`
+-- across Zoom and M365 are NOT directly comparable.
+--
+-- True minute-of-video parity would require the Zoom Dashboard QoS
+-- endpoint (`/metrics/meetings/{id}/participants/qos`) — paid tier,
+-- separate stream, new rate-limit budget. Tracked as a follow-up to
+-- #263.
 
 SELECT
     p.tenant_id,
@@ -70,21 +107,24 @@ SELECT
            dateDiff('second', parseDateTimeBestEffort(p.join_time), parseDateTimeBestEffort(p.leave_time)),
            0)
     )) AS audio_duration_seconds,
+    -- #263: gate by per-participant `camera` device name (NULL/'' means
+    -- the participant did not use a camera in this session), not by the
+    -- meeting-level `has_video` flag from sessions. See header for the
+    -- over-estimate caveat (any-video-ever-in-session counts the whole
+    -- session).
     toInt64(sumIf(
         if(p.join_time IS NOT NULL AND p.leave_time IS NOT NULL,
            dateDiff('second', parseDateTimeBestEffort(p.join_time), parseDateTimeBestEffort(p.leave_time)),
            0),
-        -- coalesce guards against JOIN miss (ml NULL): NULL = true → NULL in
-        -- ClickHouse, which sumIf skips, silently zeroing video duration.
-        -- On a JOIN miss (meeting row not yet stitched) we treat the session
-        -- as non-video rather than dropping its duration entirely.
-        coalesce(ml.has_video, false)
+        p.camera IS NOT NULL AND p.camera != ''
     )) AS video_duration_seconds,
     toInt64(sumIf(
         if(p.join_time IS NOT NULL AND p.leave_time IS NOT NULL,
            dateDiff('second', parseDateTimeBestEffort(p.join_time), parseDateTimeBestEffort(p.leave_time)),
            0),
-        coalesce(ml.has_screen_share, false)
+        coalesce(p.share_desktop, false)
+        OR coalesce(p.share_application, false)
+        OR coalesce(p.share_whiteboard, false)
     )) AS screen_share_duration_seconds,
     CAST(NULL AS Nullable(String)) AS report_period,
     now() AS collected_at,

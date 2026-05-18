@@ -108,7 +108,8 @@ SELECT
     CAST(NULL AS Nullable(UInt32))                          AS total_lines_removed,
     toUInt32(u.tool_accepted_sum + u.tool_rejected_sum)     AS tool_use_offered,
     toUInt32(u.tool_accepted_sum)                           AS tool_use_accepted,
-    CAST(NULL AS Nullable(UInt32))                          AS completions_count,
+    -- #262: `completions_count` dropped from class_ai_dev_usage (was always
+    -- NULL for Admin and numerically identical to tool_use_accepted elsewhere).
     CAST(NULL AS Nullable(UInt32))                          AS agent_sessions,
     CAST(NULL AS Nullable(UInt32))                          AS chat_requests,
     CAST(NULL AS Nullable(UInt32))                          AS cost_cents,

@@ -1,0 +1,18 @@
+name: github-copilot
+version: "1.0"
+type: cdk
+
+schedule: "0 2 * * *"   # daily at 02:00 UTC (data for day D available ~24h after end-of-day D UTC)
+workflow: sync
+
+# Silver routing: `copilot__ai_dev_usage` feeds class_ai_dev_usage with
+# tool='copilot' (active). `copilot__ai_org_usage` is deferred until
+# class_ai_org_usage is created — it ships with `enabled=false` and is
+# skipped at compile-time, but is included in the `tag:github-copilot+`
+# selector below so activation in a follow-up PR is one config change away.
+# silver_targets prohibited per Connector Spec §4.10 — Silver determined
+# by dbt_select tags on the staging models.
+dbt_select: "tag:github-copilot+"
+
+connection:
+  namespace: "bronze_github_copilot"

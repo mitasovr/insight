@@ -1,13 +1,13 @@
-{{- define "insight-identity-resolution.fullname" -}}
-{{ .Release.Name }}-identity-resolution
+{{- define "insight-identity.fullname" -}}
+{{ .Release.Name }}-identity
 {{- end }}
 
-{{- define "insight-identity-resolution.labels" -}}
-app.kubernetes.io/name: identity-resolution
+{{- define "insight-identity.labels" -}}
+app.kubernetes.io/name: identity
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{- define "insight-identity-resolution.selectorLabels" -}}
-app.kubernetes.io/name: identity-resolution
+{{- define "insight-identity.selectorLabels" -}}
+app.kubernetes.io/name: identity
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

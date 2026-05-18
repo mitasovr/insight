@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>Insight.Identity.Api</RootNamespace>
+    <AssemblyName>Insight.Identity.Api</AssemblyName>
+    <UserSecretsId>insight-identity</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NetEscapades.Configuration.Yaml" Version="3.1.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+    <PackageReference Include="Serilog.Formatting.Compact" Version="3.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Insight.Identity.Domain\Insight.Identity.Domain.csproj" />
+    <ProjectReference Include="..\Insight.Identity.Infrastructure\Insight.Identity.Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="appsettings.yaml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>

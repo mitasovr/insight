@@ -2,7 +2,59 @@ version: 2
 
 models:
   - name: class_collab_chat_activity
-    description: "Unified daily chat activity per user from all collaboration sources (M365 Teams, Slack)"
+    description: >
+      Unified daily chat activity per user from all collaboration sources
+      (M365 Teams, Slack).
+
+      ## Aggregation guidance for Gold / analytics consumers
+
+      The chat-count columns are NOT independent — several of them are
+      subsets or supersets of others. Summing the wrong pair will
+      double-count. Pick ONE of the following families per metric and
+      stick with it:
+
+      **Family A — "total engagement" (recommended for headline KPIs):**
+      `total_chat_messages` only.
+      • This is the broadest signal each vendor exposes. Treat as
+        "chat engagement", not as a precise message count — semantics
+        differ across vendors (see the column description). Do NOT add
+        any other chat-* column on top — that double-counts.
+
+      **Family B — "non-channel chat" (DM-style activity):**
+      `direct_and_group_messages` only.
+      • The vendor-honest residual: everything posted outside channels.
+        Use when you want to isolate "personal/conversational" activity
+        from broadcast/channel posting. Do NOT also add
+        `direct_messages` or `group_chat_messages` — they are subsets
+        of this column (for the vendor that populates them).
+
+      **Family C — "channel-only activity":**
+      `channel_posts` (+ `channel_replies` for m365 only).
+      • Use when you specifically want channel/broadcast activity.
+        m365 separates posts from replies; Slack folds both into
+        `channel_posts`. Cross-vendor sums of `channel_posts` are
+        defensible but not identical (Slack value is broader by
+        replies).
+
+      **Identity:** roughly,
+        `total_chat_messages ≈ direct_and_group_messages + channel_posts (+ channel_replies for m365)`.
+      The "≈" is because m365's `total_chat_messages` formula uses
+      `teamChatMessageCount` rather than `postMessages` for the channel
+      half, and the two are not strictly equal (see
+      `m365__collab_chat_activity.sql` header).
+
+      **Do not mix families.**
+      • `total_chat_messages + direct_and_group_messages` — double-counts the DM half.
+      • `total_chat_messages + channel_posts` — double-counts the channel half.
+      • `direct_and_group_messages + direct_messages` — double-counts (for Slack `direct_messages` is NULL anyway; for m365 `direct_messages = direct_and_group_messages` because group is unsurfaced).
+      • `direct_messages + group_chat_messages` — both are NULL (m365) or one is NULL (Slack). Use `direct_and_group_messages`.
+
+      **Cross-vendor warning:** the m365 contribution to
+      `direct_and_group_messages` is a strict subset (1:1 DMs only —
+      group chats unsurfaced by Microsoft). A SUM across both
+      `data_source` values systematically under-counts Teams users
+      who chat heavily in group DMs. Document that caveat in any
+      cross-vendor Gold metric.
     columns:
       - name: tenant_id
         description: "Tenant isolation field"
@@ -29,6 +81,79 @@ models:
         description: "Source discriminator: insight_m365 | insight_slack"
         tests:
           - not_null
+      - name: direct_messages
+        description: >
+          1:1 private chat message count.
+          • insight_m365  → `privateChatMessageCount` from
+            `getTeamsUserActivityUserDetail`. Exact 1:1 DM count.
+          • insight_slack → NULL. The `admin.analytics.getFile?type=member`
+            endpoint reports `messages_posted_count` (total) and
+            `channel_messages_posted_count` (channel slice) but does NOT
+            break out DMs from MPIMs. Use `direct_and_group_messages` for
+            the non-channel residual when needed.
+      - name: group_chat_messages
+        description: >
+          Multi-party (group) DM message count. **#431: unavailable from
+          both vendors' report-grade endpoints.**
+          • insight_m365  → NULL. Microsoft's
+            `getTeamsUserActivityUserDetail` does not expose a group-chat
+            counter; `teamChatMessageCount` (previously mis-mapped here)
+            is in fact **channel posts**, not group DMs. Surfacing group
+            chats would require the content-bearing `/chats` API with
+            `Chat.Read.All` scope.
+          • insight_slack → NULL. Same gap — `admin.analytics.getFile`
+            does not separate MPIM from DM.
+          Until a content-stream connector lands on either side, group-chat
+          counts are honestly NULL. See `direct_and_group_messages` for
+          the partial substitute on the Slack side.
+      - name: direct_and_group_messages
+        description: >
+          Non-channel chat message count (DMs + group DMs). Introduced in
+          #266 to give a meaningful chat-engagement signal in the absence
+          of a clean DM/MPIM breakdown.
+          • insight_slack → `messages_posted_count` minus
+            `channel_messages_posted_count` (clipped at 0). Includes
+            DMs + MPIMs together; no further split available.
+          • insight_m365  → `privateChatMessageCount` (1:1 DMs only).
+            Microsoft does not surface a group-chat counter in this
+            endpoint, so the m365 contribution to this column **excludes
+            group chats** — it is a strict subset of the Slack semantic.
+            Cross-vendor sums therefore systematically under-count Teams
+            users who are heavy group-chat users. If/when an m365 group-
+            chat stream is added, this asymmetry resolves.
+      - name: total_chat_messages
+        description: >
+          Total chat-surface message count. Semantics differ per vendor —
+          intentionally NOT a clean cross-vendor metric.
+          • insight_m365  → `privateChatMessageCount + teamChatMessageCount`
+            (1:1 DMs + team-channel messages). Excludes group chats
+            (unsurfaced — see `group_chat_messages`) and channel replies.
+          • insight_slack → `messages_posted_count` (everything the user
+            posted: DMs + MPIMs + channel posts + channel replies).
+          Slack's value is a superset (it includes replies); m365's is
+          narrower (it excludes group chats and replies). Treat as
+          "chat engagement signal" not "comparable absolute count".
+      - name: channel_posts
+        description: >
+          Channel-level message count (thread starts, not replies).
+          • insight_m365  → `postMessages`.
+          • insight_slack → `channel_messages_posted_count`. Note: Slack
+            does not distinguish thread starts from replies in the
+            analytics export, so this includes both — `channel_replies`
+            is correspondingly NULL.
+      - name: channel_replies
+        description: >
+          In-thread reply count.
+          • insight_m365  → `replyMessages` (channel thread replies).
+          • insight_slack → NULL — not separated from channel posts by
+            the analytics endpoint. Per-user reply attribution would
+            need the `conversations.replies` API.
+      - name: urgent_messages
+        description: >
+          Urgent-flagged message count.
+          • insight_m365  → `urgentMessages`.
+          • insight_slack → NULL — Slack has no urgent flag concept in
+            the analytics export.
 
   - name: class_collab_meeting_activity
     description: "Unified daily meeting activity per user from all collaboration sources (M365 Teams, Zoom)"
@@ -58,6 +183,45 @@ models:
         description: "Source discriminator: insight_m365 | insight_zoom"
         tests:
           - not_null
+      - name: audio_duration_seconds
+        description: >
+          Seconds the participant spent with audio active.
+          • insight_m365  → Microsoft Graph reports `audioDuration` per
+            user per day. Exact minute-of-audio.
+          • insight_zoom  → session length (join → leave). Zoom does not
+            distinguish "mic on" vs "joined": joining implies an audio
+            connection. Equivalent to "time in meeting".
+      - name: video_duration_seconds
+        description: >
+          Seconds the participant spent with video active. **Different
+          precision per source — see #263.**
+          • insight_m365  → Microsoft Graph reports `videoDuration` per
+            user per day. Exact minute-of-video.
+          • insight_zoom  → session length, gated by the per-participant
+            `camera` device name being populated in the Zoom participants
+            payload (NULL/'' means no camera was used in the session).
+            This is binary "did the user turn the camera on at any point
+            during the session" — it does NOT track minute-of-video. A
+            participant who turned on the camera for 1 minute of a
+            60-minute session contributes video_duration_seconds = 3600
+            (OVER-ESTIMATE). Note that `participants.video_connection_type`
+            is the network transport (Reliable UDP / P2P / ...) and is
+            NOT a camera-on indicator. True
+            minute-of-video parity with Teams would require the Zoom
+            Dashboard QoS endpoint (paid tier, separate stream).
+            Cross-vendor aggregates (sum across both data_sources) are
+            NOT directly comparable.
+      - name: screen_share_duration_seconds
+        description: >
+          Seconds the participant spent screen-sharing. **Same per-source
+          tradeoff as video_duration_seconds — see #263.**
+          • insight_m365  → Microsoft Graph reports `screenShareDuration`
+            per user per day. Exact minute-of-share.
+          • insight_zoom  → session length, gated by ANY of the
+            per-participant `share_desktop` / `share_application` /
+            `share_whiteboard` flags being true. Binary "did the user
+            share at any point" — same over-estimate caveat as
+            video_duration_seconds.
 
   - name: class_collab_email_activity
     description: "Unified daily email activity per user (M365 Outlook)"

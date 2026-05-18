@@ -38,11 +38,10 @@
 ##    only entrance to the cluster internals; the other services are
 ##    reachable only through it. This matches the Constructor Platform
 ##    integration contract.
-##    Identity Resolution (identityResolution) is OPTIONAL (deploy-flag,
-##    off by default) — it is the Rust persons-store service that owns
-##    the `identity` MariaDB database (per ADR-0006), reads observation
-##    history from ClickHouse `identity.identity_inputs`, and is NOT an
-##    OIDC provider.
+##    Identity (`identity`) is OPTIONAL (deploy-flag, off by default) —
+##    it is the .NET 9 persons-store service that owns the `identity`
+##    MariaDB database (per ADR-0006), reads observation history from
+##    ClickHouse `identity.identity_inputs`, and is NOT an OIDC provider.
 ##
 ## 5. Resolved infra coordinates (URLs, hosts) live in a single ConfigMap
 ##    named `{release}-platform` (see templates/platform-config.yaml).
@@ -69,8 +68,7 @@
 # ArgoCD renders charts via `helm template`, where Helm's `lookup`
 # function ALWAYS returns nil — so under a reconcile loop every sync
 # would regenerate `randAlphaNum 24` and rotate every DB password.
-# Set `autoGenerate: false` in any GitOps overlay (see
-# deploy/gitops/insight-values.example.yaml) and pre-create
+# Set `autoGenerate: false` in any GitOps overlay and pre-create
 # `insight-db-creds` via ExternalSecrets / sealed-secrets / SOPS.
 #
 # For Constructor Platform / BYO (air-gapped, custom secret tooling):
@@ -85,33 +83,34 @@ credentials:
   # AND `autoGenerate: false` — the validator refuses the combination
   # `gitops + autoGenerate=true` because it would silently rotate every
   # DB password on each reconcile.
-  deploymentMode: helm           # helm | gitops
+  deploymentMode: helm # helm | gitops
   autoGenerate: true
-
 # ─── Global values ────────────────────────────────────────────────────────
 # Everything under `global:` is visible to all subcharts automatically.
 # IMPORTANT: bitnami charts read `global.imageRegistry` and rewrite all
 # their images to use it. Do NOT set `imageRegistry` here — each of our
 # services sets `image.repository` explicitly.
 global:
-  imagePullSecrets: []         # pull-secrets for a private registry
-  storageClass: ""             # empty = default StorageClass of the cluster
+  imagePullSecrets: [] # pull-secrets for a private registry
+  storageClass: "" # empty = default StorageClass of the cluster
   security:
     # bitnami charts check that the image belongs to their "secure images"
     # list. We use bitnamilegacy (see mariadb.image / redis.image) so we
     # have to allow "insecure" images — otherwise the chart refuses to deploy.
     allowInsecureImages: true
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  EXTERNAL — Airbyte (installed as a separate Helm release, SAME namespace)
 # ═══════════════════════════════════════════════════════════════════════════
 airbyte:
-  releaseName: airbyte           # Helm release name used by install-airbyte.sh
-  apiUrl: ""                     # "" = compute from releaseName + .Release.Namespace
+  releaseName: airbyte # Helm release name used by install-airbyte.sh
+  apiUrl: "" # "" = compute from releaseName + .Release.Namespace
   jwtSecret:
-    name: airbyte-auth-secrets   # created by the Airbyte chart itself
-    key:  jwt-signature-secret
-
+    name: airbyte-auth-secrets # created by the Airbyte chart itself
+    key: jwt-signature-secret
+  authSecret:
+    name: airbyte-auth-secrets # same K8s Secret as jwtSecret; carries OAuth client credentials
+    clientIdKey: instance-admin-client-id # key under .data
+    clientSecretKey: instance-admin-client-secret # key under .data
 # ═══════════════════════════════════════════════════════════════════════════
 #  INGESTION — WorkflowTemplates (content for Argo)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -128,11 +127,53 @@ airbyte:
 # refuses to render when `templates.enabled=true` and these fields are
 # empty (single source of truth: the umbrella values overlay).
 ingestion:
+  # PREREQUISITE: when `templates.enabled=true`, the rendered Argo
+  # `WorkflowTemplate` objects pin `serviceAccountName: argo-workflow`.
+  # The `argo-workflow` ServiceAccount + supplemental RBAC (Role
+  # `argo-workflow-executor` granting create/patch on
+  # `workflowtaskresults.argoproj.io`) are NOT shipped by this chart —
+  # they come from `deploy/scripts/install-argo.sh` and
+  # `deploy/argo/rbac.yaml`. Run them before `helm install`, or use
+  # `deploy/scripts/install-insight.sh` which orders them for you.
+  # Otherwise workflow submission fails with
+  # `serviceaccount "argo-workflow" not found`.
   templates:
     enabled: true
-  toolboxImage: ""           # e.g. "ghcr.io/cyberfabric/insight-toolbox:2026.04.28.10.34-b08b460"
-  jiraEnrichImage: ""        # e.g. "ghcr.io/cyberfabric/insight-jira-enrich:2026.04.21.09.37-ccb013f"
-
+  toolboxImage: "ghcr.io/cyberfabric/insight-toolbox:2026.05.14.09.08-6babdf9" # e.g. "ghcr.io/cyberfabric/insight-toolbox:2026.04.28.10.34-b08b460"
+  jiraEnrichImage: "ghcr.io/cyberfabric/insight-jira-enrich:2026.05.14.09.08-6babdf9" # e.g. "ghcr.io/cyberfabric/insight-jira-enrich:2026.04.21.09.37-ccb013f"
+  # Reconcile loop: descriptor-driven Airbyte connector reconciliation,
+  # cron-scheduled inside the cluster (see templates/ingestion/reconcile-cron.yaml).
+  reconcile:
+    schedule: "*/15 * * * *"
+    # Airbyte workspace UUID is auto-discovered at runtime via ab_workspace_id (ADR-0009) — no value to set.
+    destinationId: "" # Optional override: explicit Airbyte destination UUID. Leave empty for fresh installs — reconcile auto-creates the Bronze ClickHouse destination by name (ADR-0012).
+    destinationName: "" # Optional: name of the Bronze destination managed by reconcile. Default `clickhouse-bronze`.
+    argoInstanceId: "" # Optional. Set only if the cluster's Argo workflow controller runs with `instanceID:` configured (e.g. "argo-workflows-insight" on dev-vhc). Empty leaves the controller-instanceid label off — controllers without instanceID accept that.
+    tenantId: "" # Set to the Insight tenant slug (used in source/connection names per ADR-0005). No silent default.
+    logs:
+      # `persistent: false` → reconcile-loop CronWorkflow pods write logs
+      # to an emptyDir mounted at /var/log/insight; logs survive only
+      # until pod GC. Sufficient for dev/test where the Argo controller's
+      # pod-log archive is the source of record for debugging.
+      #
+      # `persistent: true` → chart provisions a PVC at deploy time.
+      # REQUIREMENT: the StorageClass referenced (either explicit
+      # `storageClass` or the cluster default) MUST use
+      # `volumeBindingMode: Immediate` — workflow pods only exist while
+      # a Workflow is running, so a `WaitForFirstConsumer` class leaves
+      # the PVC Pending forever, blocking `helm --wait`. Production
+      # operators wanting cross-run log persistence should either
+      # provide an Immediate-binding StorageClass or accept emptyDir.
+      persistent: false
+      size: 5Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
 # ═══════════════════════════════════════════════════════════════════════════
 #  INFRASTRUCTURE
 # ═══════════════════════════════════════════════════════════════════════════
@@ -151,18 +192,17 @@ ingestion:
 # Ports are RFC standards and may stay defaulted.
 clickhouse:
   deploy: true
-  host: ""                      # deploy=true → host computed by helper from release name; deploy=false → operator MUST set
-  port: 8123                    # RFC standard for CH HTTP
-  database: ""                  # MUST be set
-  username: ""                  # MUST be set
+  host: "" # deploy=true → host computed by helper from release name; deploy=false → operator MUST set
+  port: 8123 # RFC standard for CH HTTP
+  database: "" # MUST be set
+  username: "" # MUST be set
   passwordSecret:
     # Fixed Secret name — chart convention (one Insight per namespace).
     name: "insight-db-creds"
-    key:  "clickhouse-password"
-
+    key: "clickhouse-password"
   image:
     repository: clickhouse/clickhouse-server
-    tag: ""                     # MUST be set (CH version pin, e.g. "25.3")
+    tag: "" # MUST be set (CH version pin, e.g. "25.3")
   # Databases the CH wrapper creates on first boot via
   # /docker-entrypoint-initdb.d/. Connector-specific bronze schemas
   # (bronze_jira, bronze_slack, …) are created by ingestion pipelines
@@ -172,15 +212,14 @@ clickhouse:
   persistence:
     size: 10Gi
   resources:
-    requests: { cpu: 250m, memory: 512Mi }
-    limits:   { cpu: "2",  memory: 4Gi   }
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 4Gi}
   auth:
     # Synced with passwordSecret above; the umbrella's validator enforces
     # they match. The CH subchart now `required`s both — no fallback to
     # an inline auth.password.
     existingSecret: "insight-db-creds"
     existingSecretPasswordKey: "clickhouse-password"
-
 # ─── MariaDB (bitnami) ───────────────────────────────────────────────────
 # NB: bitnami removed free images from docker.io/bitnami/* in 2025
 # (see https://github.com/bitnami/charts/issues/30850). We point at the
@@ -188,14 +227,13 @@ clickhouse:
 # your own registry.
 mariadb:
   deploy: true
-  host: ""                      # deploy=true → helper; deploy=false → MUST set
-  port: 3306                    # RFC standard for MySQL/MariaDB
-  database: ""                  # MUST be set
-  username: ""                  # MUST be set
+  host: "" # deploy=true → helper; deploy=false → MUST set
+  port: 3306 # RFC standard for MySQL/MariaDB
+  database: "" # MUST be set
+  username: "" # MUST be set
   passwordSecret:
     name: "insight-db-creds"
-    key:  "mariadb-password"
-
+    key: "mariadb-password"
   # Bitnami chart settings (read only when deploy=true).
   architecture: standalone
   image:
@@ -204,23 +242,46 @@ mariadb:
   auth:
     # bitnami/mariadb natively reads `mariadb-password` and
     # `mariadb-root-password` keys from auth.existingSecret.
+    #
+    # `auth.username` and `auth.database` ARE WHAT bitnami uses to
+    # CREATE USER + CREATE DATABASE on first pod boot. They MUST match
+    # the umbrella's top-level `mariadb.username` / `mariadb.database`
+    # (which downstream secrets.yaml uses for ANALYTICS__database_url).
+    # values.yaml is not Helm-templated, so we cannot reference one from
+    # the other — the umbrella validator (`insight.validate`) checks the
+    # match at render time and fails with a readable error on drift.
+    username: "" # MUST match mariadb.username
+    database: "" # MUST match mariadb.database
     existingSecret: "insight-db-creds"
+  # Per-service MariaDB databases (ADR-0006 — each backend service owns
+  # its own DB) are now provisioned by a post-install / post-upgrade
+  # Helm Hook Job (see templates/mariadb-init-svcdbs-job.yaml). The Job
+  # authenticates as MariaDB root using `mariadb-root-password` from
+  # `insight-db-creds`, runs idempotent CREATE DATABASE + GRANT against
+  # whatever `mariadb.host` resolves to — works for both bundled
+  # (`mariadb.deploy=true`) and external (layered gitops with
+  # `mariadb.deploy=false`) modes from a SINGLE source of truth.
+  #
+  # Replaces the previous bundled-only `mariadb-initdb-scripts.yaml`
+  # ConfigMap. The earlier `pre-install` Hook had a chicken-and-egg with
+  # the regular-template `insight-db-creds`; the new Hook uses
+  # `post-install` so the Secret is already applied when the Job runs,
+  # and the Job has an internal wait-for-MariaDB loop so the bundled
+  # subchart's first-boot delay doesn't matter.
   primary:
     persistence:
       size: 5Gi
     resources:
-      requests: { cpu: 100m, memory: 256Mi }
-      limits:   { cpu: 500m, memory: 512Mi }
-
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 500m, memory: 512Mi}
 # ─── Redis (bitnami) ─────────────────────────────────────────────────────
 redis:
   deploy: true
-  host: ""                      # deploy=true → helper; deploy=false → MUST set
-  port: 6379                    # RFC standard for Redis
+  host: "" # deploy=true → helper; deploy=false → MUST set
+  port: 6379 # RFC standard for Redis
   passwordSecret:
     name: "insight-db-creds"
-    key:  "redis-password"
-
+    key: "redis-password"
   # Bitnami chart settings (read only when deploy=true).
   architecture: standalone
   image:
@@ -234,15 +295,13 @@ redis:
     persistence:
       size: 1Gi
     resources:
-      requests: { cpu: 50m,  memory: 64Mi }
-      limits:   { cpu: 250m, memory: 128Mi }
-
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 250m, memory: 128Mi}
 # ─── Redpanda ────────────────────────────────────────────────────────────
 # For enterprise: TLS on, SASL on, 3+ replicas.
 redpanda:
   deploy: true
-  brokers: ""                   # "" = {release}-redpanda:9092
-
+  brokers: "" # "" = {release}-redpanda:9092
   # Redpanda chart settings (read only when deploy=true).
   statefulset:
     replicas: 1
@@ -265,7 +324,6 @@ redpanda:
       enabled: false
   console:
     enabled: true
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  APPLICATION SERVICES (mandatory — no deploy-flag)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -283,12 +341,11 @@ apiGateway:
   replicaCount: 2
   image:
     repository: ghcr.io/cyberfabric/insight-api-gateway
-    tag: ""                     # MUST be set (e.g. "0.1.0")
+    tag: "" # MUST be set (e.g. "0.1.0")
     pullPolicy: IfNotPresent
   resources:
-    requests: { cpu: 100m, memory: 128Mi }
-    limits:   { cpu: 500m, memory: 256Mi }
-
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 256Mi}
   ingress:
     enabled: false
     className: nginx
@@ -296,25 +353,24 @@ apiGateway:
     tls:
       enabled: false
       secretName: ""
-
   # OIDC (required in prod — either existingSecret, or ALL four inline
   # fields: issuer + audience + clientId + redirectUri). The umbrella
   # validator fails when authDisabled=false and OIDC is incomplete.
   oidc:
     existingSecret: ""
     issuer: ""
-    audience: ""                # MUST be set (e.g. "api://insight")
+    audience: "" # MUST be set (e.g. "api://insight")
     clientId: ""
     redirectUri: ""
-
-  authDisabled: false           # true = disable auth (LOCAL DEV ONLY)
-
+    # Space-separated OIDC scopes; IdP-specific (Entra wants
+    # api://<clientId>/Access.Default; Okta uses bare names).
+    scopes: ""
+  authDisabled: false # true = disable auth (LOCAL DEV ONLY)
   gateway:
     prefixPath: "/api"
     corsEnabled: true
     enableDocs: false
-    rateLimit: { rps: 100, burst: 50, inFlight: 32 }
-
+    rateLimit: {rps: 100, burst: 50, inFlight: 32}
   proxy:
     routes:
       - prefix: "/analytics"
@@ -323,69 +379,70 @@ apiGateway:
         # URL (no template syntax) to point at an external service.
         upstream: 'http://{{ .Release.Name }}-analytics-api:8081'
         public: false
-      - prefix: "/identity-resolution"
-        upstream: 'http://{{ .Release.Name }}-identity-resolution:8082'
+      - prefix: "/identity"
+        upstream: 'http://{{ .Release.Name }}-identity:8082'
         public: false
-
 # ─── Analytics API ───────────────────────────────────────────────────────
 analyticsApi:
   replicaCount: 2
   image:
     repository: ghcr.io/cyberfabric/insight-analytics-api
-    tag: ""                     # MUST be set (e.g. "0.1.0")
+    tag: "" # MUST be set (e.g. "0.1.0")
     pullPolicy: IfNotPresent
   resources:
-    requests: { cpu: 100m, memory: 128Mi }
-    limits:   { cpu: 500m, memory: 512Mi }
-
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
   # The umbrella generates `insight-analytics-api-config` with every
   # ANALYTICS__* env var filled in from the auto-generated credentials
   # (see templates/secrets.yaml). The subchart consumes it via envFrom.
   existingSecret: "insight-analytics-api-config"
-
-# ─── Identity Resolution (Rust persons-store, OFF by default) ───────────
-# NOT the OIDC identity provider. The Rust service owns its own MariaDB
-# database (per ADR-0006), reads observation history from ClickHouse
-# `identity.identity_inputs` (filled by Airbyte connector pipelines), and
-# at startup applies its embedded sea-orm migrations to build/maintain
-# `persons` and `account_person_map`. Off by default — enable only after
-# at least one connector sync has populated `identity.identity_inputs`.
-identityResolution:
+# ─── Identity (.NET 9) ───────────────────────────────────────────────────
+# The persons-store API. Reads from MariaDB `persons` written by the seed
+# pipeline (src/backend/services/identity/seed/seed-persons-from-identity-input.py)
+# fed off ClickHouse `identity.identity_inputs`. Off by default — enable
+# only after at least one connector sync has populated `identity_inputs`
+# and the seed has written `persons` rows.
+identity:
   deploy: false
   replicaCount: 1
   image:
-    repository: ghcr.io/cyberfabric/insight-identity-resolution
-    tag: ""                     # MUST be set (e.g. "0.1.0")
+    repository: ghcr.io/cyberfabric/insight-identity
+    tag: "" # MUST be set (e.g. "0.1.0")
     pullPolicy: IfNotPresent
   resources:
-    requests: { cpu: 50m,  memory: 64Mi }
-    limits:   { cpu: 250m, memory: 256Mi }
-  # MariaDB database the service owns. Per ADR-0006 each backend service
-  # with MariaDB tables runs its own sea-orm Migrator inside its own
-  # database, so its `seaql_migrations` tracker never collides with other
-  # services'. The umbrella provisions this database via a Helm
-  # pre-install/pre-upgrade Job (see templates/identity-db-init-job.yaml).
+    requests: {cpu: 50m, memory: 96Mi}
+    limits: {cpu: 250m, memory: 384Mi}
+  # MariaDB database the service owns. The service applies its own DbUp
+  # migrations (src/backend/services/identity/src/Insight.Identity.Infrastructure/Migrations/)
+  # at startup against this database — see ADR-0006 (service-owned migrations).
   databaseName: "identity"
-  # When deploy=true the umbrella also generates
-  # `insight-identity-resolution-config` with IDENTITY__* env vars.
-  existingSecret: "insight-identity-resolution-config"
-
+  # Default tenant pinned at config level. Empty string disables the
+  # config-default resolver entirely; callers then MUST send
+  # `X-Insight-Tenant-Id` or the API returns 400
+  # `urn:insight:error:tenant_unresolved`.
+  tenantDefaultId: ""
+  # When deploy=true the umbrella also generates `insight-identity-config`
+  # with IDENTITY__* env vars sourced from the auto-generated MariaDB
+  # credentials in `insight-db-creds`.
+  existingSecret: "insight-identity-config"
 # ─── Frontend (SPA) ──────────────────────────────────────────────────────
 frontend:
   replicaCount: 1
   image:
-    repository: ghcr.io/cyberfabric/insight-front
-    tag: ""                     # MUST be set (e.g. "0.1.0")
+    repository: ghcr.io/cyberfabric/cyber-insight-front
+    tag: "" # MUST be set (e.g. "0.1.0")
     pullPolicy: IfNotPresent
   resources:
-    requests: { cpu: 50m,  memory: 64Mi }
-    limits:   { cpu: 200m, memory: 128Mi }
-
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi}
   ingress:
     enabled: false
     className: nginx
     host: ""
-
   oidc:
     issuer: ""
     clientId: ""
+    # Space-separated OIDC scopes. IdP-specific (Entra wants
+    # api://<clientId>/Access.Default; Okta uses bare names).
+    # Required when issuer/clientId are set.
+    scopes: ""

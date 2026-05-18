@@ -1,54 +1,29 @@
-# Multi-stage build for Identity Resolution stub
+# Identity Resolution — .NET 9 service.
 #
-# Build context: src/backend/
-# Usage: docker build -f services/identity/Dockerfile -t insight-identity:dev .
+# Build context: src/backend/services/identity/
+# Usage: docker build -t insight-identity:dev src/backend/services/identity
 
-# Stage 1: Builder
-FROM rust:1.92-bookworm AS builder
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
 
-WORKDIR /build
+# Restore layer — copy projects first so dependency resolution caches.
+COPY Directory.Build.props global.json Insight.Identity.sln ./
+COPY src/Insight.Identity.Domain/Insight.Identity.Domain.csproj src/Insight.Identity.Domain/
+COPY src/Insight.Identity.Infrastructure/Insight.Identity.Infrastructure.csproj src/Insight.Identity.Infrastructure/
+COPY src/Insight.Identity.Api/Insight.Identity.Api.csproj src/Insight.Identity.Api/
+RUN dotnet restore src/Insight.Identity.Api/Insight.Identity.Api.csproj
 
-# --- Dependency caching layer ---
-COPY Cargo.toml Cargo.lock ./
-COPY libs/insight-clickhouse/Cargo.toml ./libs/insight-clickhouse/Cargo.toml
-COPY plugins/oidc-authn-plugin/Cargo.toml ./plugins/oidc-authn-plugin/Cargo.toml
-COPY services/api-gateway/Cargo.toml ./services/api-gateway/Cargo.toml
-COPY services/analytics-api/Cargo.toml ./services/analytics-api/Cargo.toml
-COPY services/identity/Cargo.toml ./services/identity/Cargo.toml
+# Build + publish.
+COPY src/ src/
+RUN dotnet publish src/Insight.Identity.Api/Insight.Identity.Api.csproj \
+    -c Release -o /app/publish \
+    --no-restore /p:UseAppHost=false
 
-RUN mkdir -p libs/insight-clickhouse/src && echo "" > libs/insight-clickhouse/src/lib.rs && \
-    mkdir -p plugins/oidc-authn-plugin/src && echo "" > plugins/oidc-authn-plugin/src/lib.rs && \
-    mkdir -p services/api-gateway/src && echo "fn main() {}" > services/api-gateway/src/main.rs && \
-    mkdir -p services/analytics-api/src && echo "fn main() {}" > services/analytics-api/src/main.rs && \
-    mkdir -p services/identity/src && echo "fn main() {}" > services/identity/src/main.rs
-
-RUN cargo build --release --bin identity-resolution 2>/dev/null || true
-
-# --- Source layer ---
-RUN rm -rf libs/insight-clickhouse/src services/identity/src \
-    target/release/identity-resolution target/release/deps/identity_resolution* \
-    target/release/deps/insight_clickhouse* target/release/deps/libinsight_clickhouse*
-
-COPY libs/insight-clickhouse/src/ ./libs/insight-clickhouse/src/
-COPY services/identity/src/ ./services/identity/src/
-
-RUN cargo build --release --bin identity-resolution
-
-# Stage 2: Runtime
-FROM debian:bookworm-slim
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
 WORKDIR /app
-
-COPY --from=builder /build/target/release/identity-resolution /app/identity-resolution
-
-RUN useradd -U -u 1000 appuser && \
-    chown -R 1000:1000 /app
+COPY --from=build /app/publish ./
+RUN useradd -U -u 1000 appuser \
+    && chown -R 1000:1000 /app
 USER 1000
-
 EXPOSE 8082
-
-CMD ["/app/identity-resolution"]
+ENTRYPOINT ["dotnet", "Insight.Identity.Api.dll"]

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# RULE-DEFAULTS-OK: every default below is for the local Docker-based test harness; this file is not used in production deploy.
+
 # ---------------------------------------------------------------------------
 # Local declarative-connector runner
 #
@@ -8,14 +10,24 @@ set -euo pipefail
 # Airbyte platform. Useful for rapid manifest development and validation.
 #
 # Usage:
-#   ./source.sh check   <class>/<connector> <tenant>
-#   ./source.sh discover <class>/<connector> <tenant>
-#   ./source.sh read     <class>/<connector> <tenant>
+#   ./source.sh validate        <class>/<connector>
+#   ./source.sh validate-strict <class>/<connector>
+#   ./source.sh check           <class>/<connector> <tenant>
+#   ./source.sh discover        <class>/<connector> <tenant>
+#   ./source.sh read            <class>/<connector> <tenant>
+#
+# validate vs validate-strict:
+#   - `validate` passes if the CDK loader accepts the manifest at runtime. It is
+#     lenient and resolves `$ref` before validation, so it will happily accept
+#     manifests that the Airbyte Builder UI rejects.
+#   - `validate-strict` runs the manifest through the Airbyte Builder JSON-schema
+#     validator (no `$ref` resolution). Use this before attempting to open the
+#     manifest in the Builder UI. Emits per-path error messages.
 #
 # Example:
-#   ./source.sh check   collaboration/m365 example-tenant
-#   ./source.sh discover collaboration/m365 example-tenant
-#   ./source.sh read     collaboration/m365 example-tenant
+#   $0 validate        collaboration/m365
+#   $0 validate-strict task-tracking/youtrack
+#   $0 check           collaboration/m365 example-tenant
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,34 +39,41 @@ if [[ -f "${GLOBAL_ENV_FILE}" ]]; then
   set -a; source "${GLOBAL_ENV_FILE}"; set +a
 fi
 
-IMAGE="${AIRBYTE_CONNECTOR_IMAGE:-airbyte/source-declarative-manifest:local}"
-BASE_IMAGE="${AIRBYTE_BASE_IMAGE:-airbyte/source-declarative-manifest:latest}"
-COMMAND_NAME="${AIRBYTE_COMMAND:-source-declarative-manifest}"
-SECRETS_TMPFS_OPTS="${AIRBYTE_SECRETS_TMPFS_OPTS:-/secrets:rw,mode=1777}"
+IMAGE="${AIRBYTE_CONNECTOR_IMAGE:-airbyte/source-declarative-manifest:local}"  # RULE-DEFAULTS-OK: see file header
+BASE_IMAGE="${AIRBYTE_BASE_IMAGE:-airbyte/source-declarative-manifest:latest}"  # RULE-DEFAULTS-OK: see file header
+COMMAND_NAME="${AIRBYTE_COMMAND:-source-declarative-manifest}"  # RULE-DEFAULTS-OK: see file header
+SECRETS_TMPFS_OPTS="${AIRBYTE_SECRETS_TMPFS_OPTS:-/secrets:rw,mode=1777}"  # RULE-DEFAULTS-OK: see file header
 
 usage() {
   cat >&2 <<EOF
 Usage:
-  $0 validate <class>/<connector>
-  $0 check    <class>/<connector>
-  $0 discover <class>/<connector>
-  $0 read     <class>/<connector> <connection>
+  $0 validate        <class>/<connector>
+  $0 validate-strict <class>/<connector>
+  $0 check           <class>/<connector> <tenant>
+  $0 discover        <class>/<connector> <tenant>
+  $0 read            <class>/<connector> <tenant>
 
 Commands:
-  validate  Validate manifest structure (no credentials needed)
-  check     Validate manifest + credentials against source API
-  discover  List available streams and their schemas
-  read      Extract data (outputs Airbyte Protocol JSON to stdout)
+  validate        Runtime validation — passes if the CDK loader accepts the
+                  manifest. Resolves \$ref before checking. Lenient.
+  validate-strict Strict Builder-UI validation — runs the manifest through the
+                  declarative_component_schema.yaml validator WITHOUT \$ref
+                  resolution. Use this before opening the manifest in the
+                  Airbyte Builder UI. Reports per-path errors.
+  check           Manifest + credentials against source API (smoke test)
+  discover        List available streams and their schemas
+  read            Extract data (outputs Airbyte Protocol JSON to stdout)
 
 Arguments:
   <class>/<connector>  Path relative to connectors/ (e.g. collaboration/m365)
   <tenant>             Tenant name (reads credentials from connections/<tenant>.yaml)
 
 Examples:
-  $0 validate collaboration/m365
-  $0 check   collaboration/m365 example-tenant
-  $0 discover collaboration/m365 example-tenant
-  $0 read     collaboration/m365 example-tenant
+  $0 validate        collaboration/m365
+  $0 validate-strict task-tracking/youtrack
+  $0 check           collaboration/m365 example-tenant
+  $0 discover        collaboration/m365 example-tenant
+  $0 read            collaboration/m365 example-tenant
 EOF
 }
 
@@ -88,8 +107,8 @@ if [[ ! -f "${manifest_path}" ]]; then
   exit 1
 fi
 
-# --- Load credentials from K8s Secret file + tenant yaml (skip for validate) ---
-if [[ "${command}" != "validate" ]]; then
+# --- Load credentials from K8s Secret file + tenant yaml (skip for validate modes) ---
+if [[ "${command}" != "validate" && "${command}" != "validate-strict" ]]; then
   tenant="${3:-}"
   SECRETS_DIR="${SCRIPT_DIR}/../../secrets/connectors"
 
@@ -196,6 +215,19 @@ case "${command}" in
     }
     ;;
 
+  validate-strict)
+    # Run the exact jsonschema check the Builder UI performs (no $ref resolution).
+    # Logic lives in validate_strict.py (per the no-inline-Python rule in
+    # cypilot/config/rules/code-conventions.md §"No inline scripts"); this case
+    # just mounts the script + the connector dir and invokes it inside the
+    # container which ships airbyte_cdk + pyyaml + jsonschema.
+    docker run --rm \
+      --entrypoint=/bin/sh \
+      -v "${connector_dir}:/input:ro" \
+      -v "${SCRIPT_DIR}/validate_strict.py:/scripts/validate_strict.py:ro" \
+      "${IMAGE}" -c "python3 /scripts/validate_strict.py /input/connector.yaml"
+    ;;
+
   check|discover)
     shift 2
     [[ -n "${tenant:-}" ]] && shift  # remove tenant arg
@@ -216,7 +248,7 @@ case "${command}" in
 
     if [[ ! -f "${configured_catalog}" ]]; then
       echo "ERROR: Missing configured catalog: ${configured_catalog}" >&2
-      echo "  Generate with: ./airbyte-toolkit/generate-catalog.sh ${connector_name}" >&2
+      echo "  Generate with: ./tools/declarative-connector/generate-catalog.sh ${connector_name}" >&2
       exit 1
     fi
 

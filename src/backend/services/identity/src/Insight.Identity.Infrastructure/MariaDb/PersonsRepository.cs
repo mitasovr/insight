@@ -1,0 +1,104 @@
+using Insight.Identity.Domain;
+using Insight.Identity.Domain.Services;
+using MySqlConnector;
+
+namespace Insight.Identity.Infrastructure.MariaDb;
+
+/// <summary>
+/// MariaDB-backed <see cref="IPersonsReader"/>. UUIDs are passed as raw
+/// 16-byte values to match the <c>BINARY(16)</c> storage. We use
+/// <see cref="Guid.ToByteArray(bool)">big-endian</see> serialization
+/// (RFC 4122 wire order) on both sides because the Python seeder and
+/// the Rust service write UUID bytes in that order — .NET's default
+/// mixed-endian <c>ToByteArray()</c> would silently fail every lookup
+/// against rows produced by either of them.
+/// </summary>
+public sealed class PersonsRepository : IPersonsReader
+{
+    private readonly MariaDbConnectionFactory _factory;
+
+    public PersonsRepository(MariaDbConnectionFactory factory)
+    {
+        _factory = factory;
+    }
+
+    public async Task<Guid?> ResolvePersonIdByEmailAsync(
+        Guid tenantId,
+        string emailLowercase,
+        CancellationToken cancellationToken)
+    {
+        await using var conn = await _factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = new MySqlCommand(Sql.ResolvePersonIdByEmail, conn);
+        cmd.Parameters.AddWithValue("@tenant_id", tenantId.ToByteArray(bigEndian: true));
+        cmd.Parameters.AddWithValue("@email", emailLowercase);
+        var raw = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return raw is byte[] bytes && bytes.Length == 16 ? new Guid(bytes, bigEndian: true) : null;
+    }
+
+    public async Task<IReadOnlyList<PersonObservation>> GetLatestObservationsAsync(
+        Guid tenantId,
+        Guid personId,
+        CancellationToken cancellationToken)
+    {
+        await using var conn = await _factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = new MySqlCommand(Sql.LatestObservationsForPerson, conn);
+        cmd.Parameters.AddWithValue("@tenant_id", tenantId.ToByteArray(bigEndian: true));
+        cmd.Parameters.AddWithValue("@person_id", personId.ToByteArray(bigEndian: true));
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var list = new List<PersonObservation>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var personBytes = (byte[])reader["person_id"];
+            var sourceIdBytes = (byte[])reader["insight_source_id"];
+            list.Add(new PersonObservation(
+                PersonId: new Guid(personBytes, bigEndian: true),
+                InsightSourceType: reader.GetString("insight_source_type"),
+                InsightSourceId: new Guid(sourceIdBytes, bigEndian: true),
+                ValueType: reader.GetString("value_type"),
+                ValueEffective: reader.GetString("value_effective"),
+                CreatedAt: reader.GetDateTime("created_at")));
+        }
+        return list;
+    }
+
+    public async Task<IReadOnlyList<Guid>> GetDirectSubordinateIdsAsync(
+        Guid tenantId,
+        Guid parentPersonId,
+        CancellationToken cancellationToken)
+    {
+        await using var conn = await _factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = new MySqlCommand(Sql.DirectSubordinateIds, conn);
+        cmd.Parameters.AddWithValue("@tenant_id", tenantId.ToByteArray(bigEndian: true));
+        // `parent_person_id` is intentionally stored as a 36-char string in
+        // `persons.value_id` (VARCHAR(320) COLLATE utf8mb4_bin) — see
+        // ADR-0007. The reconciliation service writes it via the same
+        // textual representation. NOT BINARY(16) like the other UUID
+        // columns; do not "fix" this to ToByteArray.
+        cmd.Parameters.AddWithValue("@parent_person_id", parentPersonId.ToString("D"));
+
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var ids = new List<Guid>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var bytes = (byte[])reader["person_id"];
+            ids.Add(new Guid(bytes, bigEndian: true));
+        }
+        return ids;
+    }
+
+    public async Task<bool> PingAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var conn = await _factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var cmd = new MySqlCommand(Sql.Healthcheck, conn);
+            var raw = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            return raw is not null;
+        }
+        catch (MySqlException)
+        {
+            return false;
+        }
+    }
+}

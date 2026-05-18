@@ -146,7 +146,7 @@ App services are mandatory umbrella components — no deploy flag.
 */}}
 {{- define "insight.apiGateway.host"          -}}{{- printf "%s-api-gateway"          .Release.Name -}}{{- end -}}
 {{- define "insight.analyticsApi.host"        -}}{{- printf "%s-analytics-api"        .Release.Name -}}{{- end -}}
-{{- define "insight.identityResolution.host"  -}}{{- printf "%s-identity-resolution" .Release.Name -}}{{- end -}}
+{{- define "insight.identity.host"            -}}{{- printf "%s-identity"             .Release.Name -}}{{- end -}}
 {{- define "insight.frontend.host"            -}}{{- printf "%s-frontend"             .Release.Name -}}{{- end -}}
 
 {{/*
@@ -201,6 +201,24 @@ Invoked from NOTES.txt so they fire on every install.
          in this case, so any template that resolves the host before this
          validator runs gets a readable error. We keep the redpanda check
          here because `insight.redpanda.brokers` covers it the same way. */ -}}
+
+  {{- /* MariaDB top-level vs subchart drift. The umbrella's secrets.yaml
+         interpolates `mariadb.username` / `mariadb.database` into
+         ANALYTICS__database_url; the bitnami subchart actually creates
+         the user and database from `mariadb.auth.username` /
+         `mariadb.auth.database`. values.yaml is not Helm-templated, so
+         we cannot reference one from the other — operators must keep
+         them in sync, and this validator catches drift loudly. */ -}}
+  {{- if .Values.mariadb.deploy -}}
+    {{- $mdb := .Values.mariadb -}}
+    {{- $mdbAuth := default dict $mdb.auth -}}
+    {{- if ne (default "" $mdb.username) (default "" $mdbAuth.username) -}}
+      {{- fail (printf "mariadb.username (%q) and mariadb.auth.username (%q) must match. The umbrella uses the former for ANALYTICS__database_url; the bitnami subchart uses the latter to CREATE USER. Set both to the same value (or unset both)." $mdb.username $mdbAuth.username) -}}
+    {{- end -}}
+    {{- if ne (default "" $mdb.database) (default "" $mdbAuth.database) -}}
+      {{- fail (printf "mariadb.database (%q) and mariadb.auth.database (%q) must match. Set both to the same value (or unset both)." $mdb.database $mdbAuth.database) -}}
+    {{- end -}}
+  {{- end -}}
 
   {{- /* Passwords live in Secrets — never inline. Validate that the
          passwordSecret reference is present; the actual Secret may be

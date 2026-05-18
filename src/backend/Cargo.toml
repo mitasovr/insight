@@ -4,7 +4,6 @@ members = [
     "plugins/oidc-authn-plugin",
     "services/api-gateway",
     "services/analytics-api",
-    "services/identity",
 ]
 resolver = "3"
 

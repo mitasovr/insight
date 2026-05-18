@@ -61,8 +61,6 @@ models:
         description: "code_tool_accepted_count + code_tool_rejected_count"
       - name: tool_use_accepted
         description: "code_tool_accepted_count"
-      - name: completions_count
-        description: "Equal to tool_use_accepted (Edit/Write/MultiEdit/NotebookEdit invocations)"
       - name: agent_sessions
         description: "NULL — no Code-specific agent counter in Enterprise"
       - name: chat_requests

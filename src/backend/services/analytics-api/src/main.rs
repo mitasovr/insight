@@ -79,9 +79,8 @@ async fn run_server(cfg: config::AppConfig) -> anyhow::Result<()> {
     }
     let ch = insight_clickhouse::Client::new(ch_config);
 
-    // Identity Resolution client
-    let identity =
-        infra::identity_resolution::IdentityResolutionClient::new(&cfg.identity_resolution_url);
+    // Identity client
+    let identity = infra::identity::IdentityClient::new(&cfg.identity_url);
 
     // Build app state
     let state = api::AppState {

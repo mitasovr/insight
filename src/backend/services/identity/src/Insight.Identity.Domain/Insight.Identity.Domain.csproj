@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Insight.Identity.Domain</RootNamespace>
+    <AssemblyName>Insight.Identity.Domain</AssemblyName>
+  </PropertyGroup>
+</Project>

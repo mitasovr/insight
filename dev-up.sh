@@ -95,6 +95,12 @@ OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-}"
 OIDC_REDIRECT_URI="${OIDC_REDIRECT_URI:-}"
 OIDC_AUDIENCE="${OIDC_AUDIENCE:-}"
 
+# Identity-service default tenant for header-less callers. Each developer's
+# MariaDB has rows under a specific `insight_tenant_id` — pin it here so
+# `GET /v1/persons/{email}` works without sending `X-Insight-Tenant-Id`.
+# Empty = identity requires the header on every request (prod mode).
+IDENTITY_TENANT_DEFAULT_ID="${IDENTITY_TENANT_DEFAULT_ID:-}"
+
 # ─── Sanity ───────────────────────────────────────────────────────────────
 if [[ "$AUTH_DISABLED" != "true" && -z "$OIDC_EXISTING_SECRET" ]]; then
   : "${OIDC_ISSUER:?ERROR: OIDC_ISSUER is required — set it in $ENV_FILE or use OIDC_EXISTING_SECRET}"
@@ -111,13 +117,28 @@ echo "  Namespace:   ${NAMESPACE}"
 echo "  Image:       ${IMAGE_REGISTRY:-<local>}/insight-*:${IMAGE_TAG}"
 echo "═══════════════════════════════════════════════════════════════"
 
+declare -A INSTALL_HINT=(
+  [kubectl]="https://kubernetes.io/docs/tasks/tools/  (Ubuntu: 'snap install kubectl --classic')"
+  [helm]="https://helm.sh/docs/intro/install/  (Ubuntu: 'snap install helm --classic')"
+  [docker]="Docker Desktop or Docker Engine — https://docs.docker.com/engine/install/"
+  [kind]="https://kind.sigs.k8s.io/docs/user/quick-start/#installation  (Linux: 'go install sigs.k8s.io/kind@latest' or curl-install)"
+)
+require_cmd() {
+  local cmd="$1" purpose="$2"
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "ERROR: '$cmd' is required ($purpose) but not found in PATH." >&2
+    echo "       Install: ${INSTALL_HINT[$cmd]:-see project README}" >&2
+    echo "       After install, re-run: $0 $*" >&2
+    exit 1
+  fi
+}
 for cmd in kubectl helm docker; do
-  command -v "$cmd" &>/dev/null || { echo "ERROR: $cmd required" >&2; exit 1; }
+  require_cmd "$cmd" "core dependency"
 done
 
 # ─── Cluster bootstrap ────────────────────────────────────────────────────
 if [[ "$CLUSTER_MODE" == "local" ]]; then
-  command -v kind &>/dev/null || { echo "ERROR: kind required for CLUSTER_MODE=local" >&2; exit 1; }
+  require_cmd kind "CLUSTER_MODE=local — Kind manages the local cluster"
   KUBECONFIG_PATH="${KUBECONFIG:-${HOME}/.kube/insight.kubeconfig}"
   if ! kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
     echo "=== Creating Kind cluster '${CLUSTER_NAME}' ==="
@@ -234,6 +255,16 @@ build_and_load_image() {
   fi
 }
 
+# Frontend image coordinates — defined OUTSIDE the `if != ingestion`
+# block because the DEV_VALUES heredoc below references `${FE_REPO}` /
+# `${FE_TAG}` unconditionally. Under `set -u`, an ingestion-only run
+# would otherwise crash with `FE_REPO: unbound variable` after the
+# toolbox/jira-enrich builds succeed but before the values file is
+# generated.
+FE_REPO="${FE_IMAGE_REPOSITORY:-ghcr.io/cyberfabric/insight-front}"
+FE_TAG="${FE_IMAGE_TAG:-$(image_tag_for frontend)}"
+FE_IMAGE="${FE_REPO}:${FE_TAG}"
+
 # App services are MANDATORY components of the umbrella (no enabled-flag),
 # so whenever we install the umbrella — including `frontend` or `backend`
 # component runs that trigger helm upgrade — every image must be present
@@ -241,7 +272,9 @@ build_and_load_image() {
 if [[ "$COMPONENT" != "ingestion" ]]; then
   echo "=== Building backend images ==="
   build_and_load_image analytics-api src/backend/services/analytics-api/Dockerfile
-  build_and_load_image identity      src/backend/services/identity/Dockerfile
+  # The .NET 9 identity service uses its OWN build context (the service
+  # folder), unlike the Rust services which share `src/backend/` as context.
+  build_and_load_image identity      src/backend/services/identity/Dockerfile src/backend/services/identity/
   build_and_load_image api-gateway   src/backend/services/api-gateway/Dockerfile
 
   # Frontend — prefer a local build from the neighbouring insight-front
@@ -251,9 +284,6 @@ if [[ "$COMPONENT" != "ingestion" ]]; then
   # what the dev just edited.
   # No `:latest` default — tag is the dev image_tag_for() output, which
   # is a deterministic dev tag (`dev`, derived from commit / mtime).
-  FE_REPO="${FE_IMAGE_REPOSITORY:-ghcr.io/cyberfabric/insight-front}"
-  FE_TAG="${FE_IMAGE_TAG:-$(image_tag_for frontend)}"
-  FE_IMAGE="${FE_REPO}:${FE_TAG}"
   # Locate the insight-front checkout. The committed `insight-front_symlink`
   # only resolves in the primary worktree; under .claude/worktrees/<branch>
   # we fall back to git's worktree list to find the main repo's sibling.
@@ -271,21 +301,50 @@ if [[ "$COMPONENT" != "ingestion" ]]; then
     done
   fi
 
-  if [[ -n "$FE_SRC" && -d "$FE_SRC" && -f "$FE_SRC/Dockerfile" ]]; then
-    echo "=== Building Frontend image from $FE_SRC ==="
-    docker build -t "$FE_IMAGE" -f "$FE_SRC/Dockerfile" "$FE_SRC"
-  else
-    echo "=== Pulling Frontend image ==="
-    case "$(uname -m)" in
-      arm64|aarch64) FE_PLATFORM="linux/arm64" ;;
-      *)             FE_PLATFORM="linux/amd64" ;;
-    esac
-    if ! docker pull --platform "$FE_PLATFORM" "$FE_IMAGE" 2>/dev/null; then
-      echo "  (no $FE_PLATFORM manifest, falling back to linux/amd64 via emulation)"
-      docker pull --platform linux/amd64 "$FE_IMAGE"
+  # Honour BUILD_IMAGES=false: the caller has the FE image already (e.g.
+  # local registry warm-cache, manual pre-pull) and does not want
+  # `dev-up.sh` to rebuild from the neighbouring insight-front checkout
+  # OR to re-pull from ghcr — issue #275 B8. Skip the build/pull here;
+  # the kind-load step below still tries to load the existing local
+  # image into the cluster, which is cheap and idempotent.
+  if [[ "$BUILD_IMAGES" == "true" ]]; then
+    if [[ -n "$FE_SRC" && -d "$FE_SRC" && -f "$FE_SRC/Dockerfile" ]]; then
+      echo "=== Building Frontend image from $FE_SRC ==="
+      docker build -t "$FE_IMAGE" -f "$FE_SRC/Dockerfile" "$FE_SRC"
+    else
+      echo "=== Pulling Frontend image ==="
+      case "$(uname -m)" in
+        arm64|aarch64) FE_PLATFORM="linux/arm64" ;;
+        *)             FE_PLATFORM="linux/amd64" ;;
+      esac
+      if ! docker pull --platform "$FE_PLATFORM" "$FE_IMAGE" 2>/dev/null; then
+        echo "  (no $FE_PLATFORM manifest, falling back to linux/amd64 via emulation)"
+        docker pull --platform linux/amd64 "$FE_IMAGE"
+      fi
     fi
+  else
+    echo "=== Skipping Frontend build/pull (BUILD_IMAGES=false) ==="
   fi
   [[ "$LOAD_IMAGES_INTO_KIND" == "true" ]] && kind load docker-image "$FE_IMAGE" --name "${CLUSTER_NAME}"
+fi
+
+# Ingestion-template images. These run inside Argo WorkflowTemplates
+# (charts/insight/templates/ingestion/*.yaml) when
+# `ingestion.templates.enabled=true`:
+#   - insight-toolbox       — dbt + helper CLI; runs all dbt-run workflows
+#   - insight-jira-enrich   — Rust binary that augments bronze_jira between
+#                             Airbyte sync and silver-layer dbt models
+# We build them on `dev-up.sh all` and `dev-up.sh ingestion` so the local
+# stack matches production behaviour out of the box. Skip when only
+# building app/backend/frontend — those runs neither install Argo
+# templates nor need these images.
+TOOLBOX_IMAGE_REF="${INGESTION_TOOLBOX_IMAGE:-insight-toolbox:local}"
+JIRA_ENRICH_IMAGE_REF="${INGESTION_JIRA_ENRICH_IMAGE:-insight-jira-enrich:local}"
+if [[ "$COMPONENT" == "all" || "$COMPONENT" == "ingestion" ]] && [[ "$BUILD_IMAGES" == "true" ]]; then
+  echo "=== Building ingestion-template images ==="
+  TOOLBOX_IMAGE="$TOOLBOX_IMAGE_REF" "$ROOT_DIR/src/ingestion/tools/toolbox/build.sh"
+  JIRA_ENRICH_IMAGE="$JIRA_ENRICH_IMAGE_REF" KIND_CLUSTER="$CLUSTER_NAME" \
+    "$ROOT_DIR/src/ingestion/connectors/task-tracking/jira/enrich/build.sh"
 fi
 
 # ─── Generate dev overrides for umbrella ──────────────────────────────────
@@ -298,6 +357,8 @@ DEV_VALUES=$(mktemp)
 trap 'rm -f "$DEV_VALUES"' EXIT
 
 ANALYTICS_IMG=$(image_ref analytics-api)
+# `identity` image is the .NET service (legacy Rust stub retired —
+# build_and_load_image identity above points at the C# Dockerfile).
 IDENTITY_IMG=$(image_ref identity)
 GATEWAY_IMG=$(image_ref api-gateway)
 
@@ -332,22 +393,26 @@ analyticsApi:
     repository: "${AN_REPO}"
     tag: "${AN_TAG_VAL}"
     pullPolicy: "${IMAGE_PULL_POLICY}"
-identityResolution:
+identity:
   image:
     repository: "${ID_REPO}"
     tag: "${ID_TAG_VAL}"
     pullPolicy: "${IMAGE_PULL_POLICY}"
+  tenantDefaultId: "${IDENTITY_TENANT_DEFAULT_ID}"
 frontend:
   image:
     # Frontend image is built from local source by build_and_load_frontend()
-    # below — repo + tag are computed from $(image_ref frontend), no
-    # `:latest` fallback (the chart `required`s tag).
+    # below — repo + tag are computed from \$(image_ref frontend), no
+    # \`:latest\` fallback (the chart \`required\`s tag).
     repository: "${FE_REPO}"
     tag: "${FE_TAG}"
     pullPolicy: "${IMAGE_PULL_POLICY}"
   ingress:
     enabled: ${INGRESS_ENABLED}
     className: "${INGRESS_CLASS}"
+ingestion:
+  toolboxImage:    "${TOOLBOX_IMAGE_REF}"
+  jiraEnrichImage: "${JIRA_ENRICH_IMAGE_REF}"
 EOF
 
 if [[ -n "$IMAGE_PULL_SECRET" ]]; then
@@ -369,8 +434,13 @@ if ! kubectl get crd workflowtemplates.argoproj.io >/dev/null 2>&1; then
 fi
 
 # Ordered list of values files passed to the umbrella. dev overlay first
-# (base eval credentials), env-derived override file second (wins).
-INSIGHT_VALUES_FILES="$ROOT_DIR/deploy/values-dev.yaml:$DEV_VALUES"
+# (base eval credentials), env-derived override file second, then anything
+# the caller pre-set in INSIGHT_VALUES_FILES last so it wins on conflicts.
+# Without the trailing append, exporting INSIGHT_VALUES_FILES before
+# `dev-up.sh` had no effect — the script overwrote it unconditionally
+# (issue #275 B7).
+_BASE_VALUES_FILES="$ROOT_DIR/deploy/values-dev.yaml:$DEV_VALUES"
+INSIGHT_VALUES_FILES="${_BASE_VALUES_FILES}${INSIGHT_VALUES_FILES:+:$INSIGHT_VALUES_FILES}"
 
 # ─── Delegate to canonical installers ─────────────────────────────────────
 case "$COMPONENT" in

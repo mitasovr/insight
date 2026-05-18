@@ -17,9 +17,9 @@ Single canonical unit of delivery for the Insight platform.
 | API Gateway           | app service (req'd)  | `src/backend/services/api-gateway/helm`      | mandatory (no flag)             |
 | Analytics API         | app service (req'd)  | `src/backend/services/analytics-api/helm`    | mandatory (no flag)             |
 | Frontend (SPA)        | app service (req'd)  | `src/frontend/helm`                          | mandatory (no flag)             |
-| Identity Resolution   | app service (opt)    | `src/backend/services/identity/helm`         | `identityResolution.deploy`     |
+| Identity (.NET 9)     | app service (opt)    | `src/backend/services/identity/helm`         | `identity.deploy`               |
 
-> Identity Resolution is a C# stub that requires populated bronze data; it is **not** an OIDC provider. Off by default.
+> Identity requires a populated `persons` table (seeded by `src/backend/services/identity/seed/seed-persons.sh`). Not an OIDC provider. Off by default.
 
 ## What it does NOT contain
 
@@ -62,6 +62,8 @@ Before going to prod:
 - [ ] Decide on credentials strategy:
   - **Auto-gen (default):** `credentials.autoGenerate: true` — the umbrella creates `insight-db-creds` with random 24-char passwords on first install and reuses them via `lookup` on every upgrade.
   - **BYO / Constructor Platform:** pre-create `insight-db-creds` with all required keys (`clickhouse-password`, `mariadb-password`, `mariadb-root-password`, `redis-password`) before the first `helm install`. The umbrella picks them up. Missing/empty keys fail fast.
+    - Works regardless of `credentials.autoGenerate`: the chart auto-detects BYO via absence of the `app.kubernetes.io/managed-by=Helm` label on the existing Secret and skips its own Secret-template emission, so Helm never tries to take ownership of the customer-managed Secret. No manual labeling required.
+    - **Dry-run note**: `helm install --dry-run` (default, client-side) skips the `lookup` function, so the BYO preview will incorrectly show the chart emitting `insight-db-creds`. Use `helm install --dry-run=server` (Helm ≥3.13) for an accurate BYO sanity-check — it exercises `lookup` against the real cluster.
 - [ ] Set OIDC via `apiGateway.oidc.existingSecret` (preferred) or all three of `issuer` + `clientId` + `redirectUri` together. Never inline secrets.
 - [ ] Enable ingress + TLS: `apiGateway.ingress`, `frontend.ingress`
 - [ ] Bump resources where needed (default `requests` are conservative)
@@ -96,7 +98,7 @@ Key groups:
 - `global.*` — cluster-wide defaults (pull secrets, storage class, bitnami image policy)
 - `<dep>.deploy` / `<dep>.host` / `<dep>.port` / `<dep>.passwordSecret` — unified shape for ClickHouse, MariaDB, Redis, Redpanda
 - `apiGateway` / `analyticsApi` / `frontend` — **mandatory** app services (no deploy-flag; the gateway is the single entrance and the product is one unit)
-- `identityResolution.deploy` — **optional** identity-resolution service (off by default; not an OIDC provider)
+- `identity.deploy` — **optional** .NET identity service (off by default; not an OIDC provider)
 - `apiGateway.oidc` — OIDC configuration (prefer `existingSecret`; inline requires `issuer` + `clientId` + `redirectUri` together)
 - `apiGateway.proxy.routes` — reverse-proxy config to downstream services
 - `ingestion.templates.enabled` — whether to ship Argo WorkflowTemplates; requires Argo CRDs to be present in the cluster

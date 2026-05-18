@@ -98,7 +98,7 @@ All discrepancies from the original draft are resolved per cyberantonz comments 
 | Stats / percentiles | **Resolved**: No separate stats endpoint. Seed a dedicated stats `Metric` per KPI with `quantile(0.05)(...)`, `quantile(0.50)(...)`, `quantile(0.95)(...)` in `query_ref`. Same query path as all other metrics. |
 | Threshold config | **Resolved**: Thresholds are nested under metrics. CRUD: `GET/POST /api/analytics/v1/metrics/{id}/thresholds`, `PUT/DELETE /api/analytics/v1/metrics/{id}/thresholds/{tid}`. Each threshold: `field_name`, `operator`, `value`, `level` (good/warning/critical). Evaluation is server-side — each query response row includes `_thresholds: { field_name: level }`. |
 | Data availability | **Resolved**: Analytics API does NOT include `data_availability` in query responses. Frontend calls Connector Manager directly: `GET /api/connectors/v1/connections/{id}/status`. See §8. |
-| Person profile | **Resolved**: Use Identity Service directly (`GET /api/identity-resolution/v1/persons/{id}`). No analytics metric needed for person header. |
+| Person profile | **Resolved**: Use Identity Service directly (`GET /api/identity/v1/persons/{id}`). No analytics metric needed for person header. |
 
 ---
 
@@ -836,7 +836,7 @@ Once `class_ci_runs` is available:
 - [x] Threshold evaluation is server-side — `_thresholds` field in every response row
 - [x] P5/P50/P95 via regular seeded stats metrics with `quantile()` in `query_ref`
 - [x] `data_availability` from Connector Manager, not Analytics API
-- [x] Person profile from Identity Service: `GET /api/identity-resolution/v1/persons/{id}`
+- [x] Person profile from Identity Service: `GET /api/identity/v1/persons/{id}`
 
 ### Backend — Metric Catalog Seeding
 
@@ -895,5 +895,5 @@ only Git metrics, which are misleading for management without business delivery 
 - [ ] Switch from period enum to `metric_date` OData `$filter` ranges
 - [ ] Read `_thresholds` field from response rows for cell coloring (replaces client-side threshold computation)
 - [ ] Move `delta`/`delta_type` computation to frontend (two parallel requests, diff)
-- [ ] Add Identity Service call for IC person header (`GET /api/identity-resolution/v1/persons/{id}`)
+- [ ] Add Identity Service call for IC person header (`GET /api/identity/v1/persons/{id}`)
 - [ ] Fetch connector status from Connector Manager in parallel with analytics queries

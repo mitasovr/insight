@@ -1,3 +1,4 @@
+-- depends_on: {{ ref('cursor__bronze_promoted') }}
 -- Bronze → Silver step 1: Cursor per-user per-day usage → class_ai_dev_usage
 --
 -- Source: bronze_cursor.cursor_daily_usage — daily aggregate stream from
@@ -48,7 +49,8 @@ SELECT
     toUInt32(coalesce(totalLinesDeleted, 0))        AS total_lines_removed,
     toUInt32OrNull(toString(totalTabsShown))        AS tool_use_offered,
     toUInt32OrNull(toString(totalTabsAccepted))     AS tool_use_accepted,
-    toUInt32OrNull(toString(totalTabsAccepted))     AS completions_count,
+    -- #262: `completions_count` was numerically identical to tool_use_accepted
+    -- (both = totalTabsAccepted) and dropped from class_ai_dev_usage.
     toUInt32OrNull(toString(agentRequests))         AS agent_sessions,
     toUInt32(coalesce(chatRequests, 0) + coalesce(composerRequests, 0))
                                                     AS chat_requests,
@@ -65,6 +67,11 @@ FROM {{ source('bronze_cursor', 'cursor_daily_usage') }}
 WHERE isActive = true
   AND email IS NOT NULL
   AND trim(email) != ''
+  -- Defensive: bronze can occasionally carry NULL `date`. Without this guard
+  -- CAST(NULL AS Int64) → 0 and fromUnixTimestamp64Milli(0) → 1970-01-01,
+  -- which silently corrupts the incremental boundary (max(day) gets stuck
+  -- at the epoch) and emits a phantom 1970 row into Silver.
+  AND date IS NOT NULL
 {% if is_incremental() %}
   AND toDate(fromUnixTimestamp64Milli(CAST(date AS Int64))) > (
       SELECT coalesce(max(day), toDate('1970-01-01')) - INTERVAL 3 DAY

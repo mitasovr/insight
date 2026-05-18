@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "insight-identity-resolution.fullname" . }}
+  name: {{ include "insight-identity.fullname" . }}
   labels:
-    {{- include "insight-identity-resolution.labels" . | nindent 4 }}
+    {{- include "insight-identity.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "insight-identity-resolution.selectorLabels" . | nindent 6 }}
+      {{- include "insight-identity.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "insight-identity-resolution.selectorLabels" . | nindent 8 }}
+        {{- include "insight-identity.selectorLabels" . | nindent 8 }}
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -29,18 +29,19 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-        - name: identity-resolution
-          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+        - name: identity
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           envFrom:
-            # Operator MUST pre-create this Secret (umbrella does it
-            # automatically as `insight-identity-resolution-config`).
             - secretRef:
-                name: {{ required "existingSecret is required (umbrella provides `insight-identity-resolution-config` when identityResolution.deploy=true; standalone installs supply their own)" .Values.existingSecret | quote }}
+                name: {{ required "existingSecret is required (umbrella provides `insight-identity-config` when identity.deploy=true; standalone installs supply their own)" .Values.existingSecret | quote }}
+          env:
+            - name: ASPNETCORE_URLS
+              value: "http://0.0.0.0:{{ .Values.service.port }}"
           securityContext:
             allowPrivilegeEscalation: false
           {{- with .Values.livenessProbe }}
