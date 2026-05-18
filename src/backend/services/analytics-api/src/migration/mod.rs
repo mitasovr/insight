@@ -7,6 +7,7 @@ mod m20260428_000001_collab_metrics_update;
 mod m20260429_000001_task_delivery_silver_rewrite;
 mod m20260430_000001_update_git_bullet;
 mod m20260515_000001_task_delivery_bullet_rewrite;
+mod m20260518_000001_collab_bullet_rewrite;
 
 use sea_orm_migration::prelude::*;
 
@@ -23,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260429_000001_task_delivery_silver_rewrite::Migration),
             Box::new(m20260430_000001_update_git_bullet::Migration),
             Box::new(m20260515_000001_task_delivery_bullet_rewrite::Migration),
+            Box::new(m20260518_000001_collab_bullet_rewrite::Migration),
         ]
     }
 }
