@@ -8,6 +8,13 @@ metadata:
   labels:
     app.kubernetes.io/component: reconcile-loop
     {{- include "insight.labels" . | nindent 4 }}
+    {{- with .Values.ingestion.reconcile.argoInstanceId }}
+    # When the cluster's Argo workflow-controller runs with `instanceID:`
+    # set, it only schedules CronWorkflows carrying a matching
+    # controller-instanceid label. Without this, lastScheduled stays
+    # `never` and the reconcile loop silently doesn't tick.
+    workflows.argoproj.io/controller-instanceid: {{ . | quote }}
+    {{- end }}
 spec:
   schedule: {{ required "ingestion.reconcile.schedule is required" .Values.ingestion.reconcile.schedule | quote }}
   concurrencyPolicy: Forbid
@@ -50,12 +57,20 @@ spec:
           command: [bash]
           args:
             - "-c"
-            - "bash /src/ingestion/reconcile-connectors/main.sh"
+            - "bash /ingestion/reconcile-connectors/main.sh"
           env:
             - name: AIRBYTE_URL
               value: {{ include "insight.airbyte.url" . | quote }}
             - name: INSIGHT_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            # CONNECTORS_DIR — where the toolbox image keeps connectors/
+            # (Dockerfile builds with context=src/ingestion and
+            # `COPY . /ingestion`, so descriptors land at
+            # /ingestion/connectors/<category>/<name>/descriptor.yaml).
+            # lib/discover.sh, lib/validate.sh, lib/connector-naming.sh
+            # and lib/reconcile.sh all hard-require this variable.
+            - name: CONNECTORS_DIR
+              value: "/ingestion/connectors"
             # Airbyte workspace UUID is auto-discovered at runtime via ab_workspace_id (ADR-0009).
             # Bronze destination is auto-resolved-or-created by reconcile from
             # the Clickhouse connection details below (ADR-0012). The legacy
