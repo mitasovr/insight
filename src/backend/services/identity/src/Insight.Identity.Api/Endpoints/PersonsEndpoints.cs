@@ -37,9 +37,7 @@ public static class PersonsEndpoints
                     statusCode: StatusCodes.Status400BadRequest);
             }
 
-            var lookupOptions = options.Value.ExpandSubordinates
-                ? new LookupOptions(ExpandSubordinates: true, MaxDepth: options.Value.MaxSubordinateDepth)
-                : LookupOptions.Phase1;
+            var lookupOptions = BuildLookupOptions(options.Value);
 
             var person = await lookup.GetByEmailAsync(tenantId.Value, email, lookupOptions, cancellationToken)
                 .ConfigureAwait(false);
@@ -62,6 +60,7 @@ public static class PersonsEndpoints
             ITenantContext tenants,
             ProfileLookupService lookup,
             IValidator<ResolveProfileCommandModel> validator,
+            IOptions<AppOptions> options,
             CancellationToken cancellationToken) =>
         {
             var tenantId = tenants.Resolve(http);
@@ -96,7 +95,8 @@ public static class PersonsEndpoints
                 SourceType: body.InsightSourceType,
                 SourceId: body.InsightSourceId);
 
-            var result = await lookup.ResolveAsync(tenantId.Value, query, cancellationToken).ConfigureAwait(false);
+            var lookupOptions = BuildLookupOptions(options.Value);
+            var result = await lookup.ResolveAsync(tenantId.Value, query, lookupOptions, cancellationToken).ConfigureAwait(false);
             return result switch
             {
                 ProfileLookupResult.Found f => Results.Ok(ProfileResponse.From(f.Profile)),
@@ -132,4 +132,12 @@ public static class PersonsEndpoints
 
         return app;
     }
+
+    /// <summary>Translate the config block into the domain-layer lookup options.</summary>
+    private static LookupOptions BuildLookupOptions(AppOptions config) =>
+        new(
+            ExpandParent: config.ExpandSubordinates,
+            ExpandSubordinates: config.ExpandSubordinates,
+            MaxDepth: config.MaxSubordinateDepth,
+            OrgChartSourceType: config.OrgChartSourceType);
 }
