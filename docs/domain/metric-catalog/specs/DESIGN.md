@@ -161,6 +161,14 @@ The catalog's admin write path depends on `is_tenant_admin(tenant_id)` and an `a
 
 **ADRs**: _no ADRs in v1; rationale lives in PRD §12 risk #625 and v1.8 changelog._
 
+#### Single-tenant `tenantDefaultId` fallback
+
+- [ ] `p2` - **ID**: `cpt-metric-cat-constraint-tenant-default`
+
+For single-tenant installations (local dev, on-prem deployments with one tenant, the helmfile dev cluster) the operator MAY configure a `tenantDefaultId` (UUID) in the analytics-api Helm `values.yaml`; when a request does not carry a tenant context (no session-bound `tenant_id`, no upstream tenant header), `cpt-metric-cat-component-auth-trait` falls back to this configured default for both the read and admin paths. Multi-tenant installations leave `tenantDefaultId` unset — in that mode a tenant-less request is rejected with a canonical `invalid_argument` envelope (`field_violations` entry with `field = "tenant_id"`, `reason = "TENANT_UNRESOLVED"`) per §3.3. Mirrors the identity-resolution pattern (`IDENTITY__identity__tenant_default_id` → `ConfigTenantContext` in `src/backend/services/identity`), so operators see the same single-tenant ergonomic across Insight services.
+
+**ADRs**: _no ADRs in v1._
+
 #### Schema-link validation
 
 - [ ] `p2` - **ID**: `cpt-metric-cat-constraint-schema-validation`
@@ -544,7 +552,8 @@ Models the auth dependency as a Rust trait (`TenantAuthorization`) per `cpt-metr
 
 ##### Responsibility scope
 
-- Provide `is_tenant_admin(tenant_id, session) -> bool` and `actor_subject(session) -> ActorId` to `cpt-metric-cat-component-admin-crud`.
+- Provide `resolve_tenant(session) -> Option<TenantId>`, `is_tenant_admin(tenant_id, session) -> bool`, and `actor_subject(session) -> ActorId` to `cpt-metric-cat-component-admin-crud` and `cpt-metric-cat-component-catalog-reader`.
+- `resolve_tenant` returns the session-bound tenant when present; otherwise falls back to the configured `tenant_default_id` (see `cpt-metric-cat-constraint-tenant-default`). If neither resolves, the caller surfaces a canonical `invalid_argument` envelope (§3.3) with `field_violations[{field: "tenant_id", reason: "TENANT_UNRESOLVED"}]`.
 - Define the stable Rust signature consumed by the catalog regardless of the underlying Auth implementation.
 - Carry the staging stub configuration so non-production environments can exercise the admin path end-to-end.
 
@@ -553,6 +562,7 @@ Models the auth dependency as a Rust trait (`TenantAuthorization`) per `cpt-metr
 - Does NOT implement RBAC itself — this is the contract layer; the real implementation lives in the Auth service.
 - Does NOT authenticate sessions — assumes the auth middleware has already validated and attached a session token upstream.
 - Does NOT cache authorization decisions in v1.
+- Does NOT define multi-tenant `tenant_default_id` semantics — the constraint is single-tenant only; if `tenant_default_id` is configured AND a session carries a *different* tenant, the session wins (configured default is a fallback, never an override).
 
 ##### Related components (by ID)
 
@@ -677,6 +687,8 @@ Fields `type`, `title`, `status`, `detail`, `context` are always present; `insta
 
 **Request body (model-level)**: `{ role_slug?: string, team_id?: string }`. Both fields are optional; empty `{}` resolves at the `tenant` / `product-default` chain only. The verb is POST (not GET) so request-context fields never appear in HTTP access logs, proxy logs, or third-party query-string captures — and so HTTP / CDN intermediaries cannot cache the response, which leaves the server-side `cpt-metric-cat-component-cache-layer` as the single canonical cache (per `cpt-metric-cat-principle-server-cache`).
 
+**Tenant resolution**: `tenant_id` is NEVER accepted from the request body; it is resolved by `cpt-metric-cat-component-auth-trait` from the session, or — for single-tenant deployments — from the configured `tenantDefaultId` per `cpt-metric-cat-constraint-tenant-default`. If neither resolves, the endpoint returns `400 invalid_argument` (see error contract below).
+
 **Response body (model-level)**: `{ tenant_id, generated_at, metrics: [{ id, label, sublabel, description, unit, format, higher_is_better, is_member_scale, source_tags: [string], schema_status, schema_error_code?, thresholds: { good, warn, alert_trigger?, alert_bad?, resolved_from, bounded_by_lock } }] }`. Each metric carries `id` (UUIDv7) as its stable wire identifier; the backend-internal `metric_key` (`table_name.column_name`) is intentionally omitted so consumers cannot couple to source-schema names. `schema_status` is `"ok" | "error" | "unchecked"` — populated by `cpt-metric-cat-component-schema-validator` per `cpt-metric-cat-constraint-schema-validation` so consumers can mark broken metrics; `schema_error_code` (only present when status is `"error"`) is a canonical code from the set `{ table_not_found, column_not_found, clickhouse_unreachable, unknown }` — raw ClickHouse error text NEVER reaches consumers. `resolved_from` is one of `"team+role" | "team" | "role" | "tenant" | "product-default"` per `cpt-metric-cat-fr-scoped-thresholds`; `bounded_by_lock` is a boolean indicating whether the walk halted on a locked broader-scope row before reaching the most-specific candidate (separate signal from `resolved_from`, which always names the row that won).
 
 #### Admin Threshold CRUD
@@ -703,7 +715,7 @@ Fields `type`, `title`, `status`, `detail`, `context` are always present; `insta
 
 **Error contract (model-level)** — all responses follow the canonical envelope defined at the top of §3.3. Status / category / context for each catalog-specific failure:
 
-- **400 `invalid_argument`** — scope-shape mismatch (wrong `role_slug` / `team_id` sentinel for declared `scope`), sanity-bound violation (e.g., `warn` crossing `good` against `higher_is_better`), unknown / disabled `metric_key`, or `lock_reason` length / format violation. `context.field_violations` carries one entry per violation, e.g.
+- **400 `invalid_argument`** — scope-shape mismatch (wrong `role_slug` / `team_id` sentinel for declared `scope`), sanity-bound violation (e.g., `warn` crossing `good` against `higher_is_better`), unknown / disabled `metric_key`, `lock_reason` length / format violation, **or tenant context missing in a multi-tenant install** (no session-bound `tenant_id` AND no `tenantDefaultId` configured — see `cpt-metric-cat-constraint-tenant-default`; surfaces as `field_violations[{field: "tenant_id", reason: "TENANT_UNRESOLVED"}]`). `context.field_violations` carries one entry per violation, e.g.
   ```json
   { "context": { "resource_type": "gts.cf.insight.metric_catalog.threshold.v1~",
                  "field_violations": [
@@ -780,6 +792,7 @@ All nine components live inside the `analytics-api` crate; the catalog has no in
 | `analytics.metrics` table | Read-only (loose pointer) | Holds the existing `query_ref` rows; `metric_catalog.metric_key` aligns loosely with the metric keys it emits. No FK; opacity preserved per PRD §1.1 layer boundary. |
 | ClickHouse `system.columns` | Read-only schema introspection | Used by `cpt-metric-cat-component-schema-validator` to confirm each metric's `table.column` reference exists; result is cached on `metric_catalog.schema_status` so reads never hit ClickHouse on the request path. |
 | `modkit-canonical-errors` (cyberfabric-core Rust crate) | `CanonicalError` enum + RFC 9457 `Problem` serializer + `#[resource_error]` macro | Every 4xx / 5xx response across catalog endpoints is constructed through this crate per the §3.3 error envelope. Aligns the catalog's wire shape with DNA `REST/API.md §7` and other cyberfabric services so a shared client error handler works across the platform. |
+| analytics-api Helm chart (`src/backend/services/analytics-api/helm/values.yaml`) | `tenantDefaultId` (UUID, optional) → env var `ANALYTICS__metric_catalog__tenant_default_id` → Rust config `metric_catalog.tenant_default_id` | Single-tenant fallback consumed by `cpt-metric-cat-component-auth-trait.resolve_tenant` per `cpt-metric-cat-constraint-tenant-default`. Multi-tenant installs leave it unset. Mirrors `IDENTITY__identity__tenant_default_id` in the identity service. |
 
 **Dependency Rules** (per project conventions):
 
@@ -1087,6 +1100,8 @@ The catalog owns three MariaDB tables. v1 invariants are enforced at both the DB
 - [ ] `p3` - **ID**: `cpt-metric-cat-topology-analytics-api`
 
 The catalog ships entirely inside the existing `analytics-api` service; v1 introduces **no new deployment unit**. Every analytics-api replica carries the nine components from §3.2 and, at startup, runs the SeaORM migration runner (`cpt-metric-cat-component-seed-migration`) followed by the schema-validation pass (`cpt-metric-cat-component-schema-validator`). The cache backend (Redis OR pub-sub channel), MariaDB, and the ClickHouse warehouse (queried read-only via `system.columns`) are shared across replicas. Cross-replica invalidation MUST observe `cpt-metric-cat-nfr-cross-replica-invalidation` (≤ 2 s p99) — that bound is the load-bearing reason this layer is not purely in-process.
+
+**Tenancy mode**: a deployment is **single-tenant** when the analytics-api Helm values `tenantDefaultId` is set to a UUID (the auth-trait falls back to it on every tenant-less request) and **multi-tenant** when `tenantDefaultId` is unset (tenant-less requests are rejected per `cpt-metric-cat-constraint-tenant-default`). The catalog itself is identical in both modes — only the auth-trait resolution shape differs.
 
 ```
                   ┌─────────────────────────┐
