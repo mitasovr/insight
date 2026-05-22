@@ -21,7 +21,7 @@ data:
     <clickhouse>
       {{- range $log := .Values.systemLogsTtl.logs }}
       <{{ $log }}>
-        <ttl>event_date + INTERVAL {{ $.Values.systemLogsTtl.days }} DAY DELETE</ttl>
+        <ttl>event_date + INTERVAL {{ $.Values.systemLogsTtl.days | int }} DAY DELETE</ttl>
       </{{ $log }}>
       {{- end }}
     </clickhouse>

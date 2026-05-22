@@ -42,6 +42,8 @@ readinessProbe: {}
 # their schema; apply ALTER TABLE MODIFY TTL on running clusters once.
 systemLogsTtl:
   enabled: true
+  # Must be >= 1. Setting `0` is syntactically valid but semantically
+  # destructive — every row would be evicted on the next merge.
   days: 1
   logs:
     - query_log

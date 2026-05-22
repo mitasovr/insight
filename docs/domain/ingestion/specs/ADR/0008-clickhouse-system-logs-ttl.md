@@ -65,6 +65,10 @@ already-existing tables (their schema is fixed at first creation).
   log-related decisions (sampling, disabling specific logs, separate
   retention per log) extend the same ConfigMap without further chart
   surgery.
+- `helm upgrade` on an already-running cluster adds a new volume
+  mount to the StatefulSet pod template, which triggers a rolling
+  pod replacement. Schedule the upgrade during a low-activity window
+  to avoid aborting in-flight Airbyte syncs.
 
 ## Migration
 
@@ -95,6 +99,13 @@ ALTER TABLE system.error_log              MODIFY TTL event_date + INTERVAL 1 DAY
 ```
 
 This is a one-time operation per cluster.
+
+ClickHouse normalises the TTL expression to
+`event_date + toIntervalDay(1)` in `SHOW CREATE TABLE` output
+regardless of whether it was set via `config.d` XML (`INTERVAL 1 DAY
+DELETE`) or `MODIFY TTL` SQL (`INTERVAL 1 DAY` — `DELETE` is the
+default action and is optional). Both forms converge to the same
+stored expression and the same 1-day retention.
 
 ## Alternatives considered
 
