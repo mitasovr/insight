@@ -43,7 +43,7 @@ readinessProbe:
   failureThreshold: 3       # 3 * 5s grace before Service drops us
 
 # How long k8s waits for graceful shutdown after SIGTERM before SIGKILL.
-# Matches SHUTDOWN_GRACE_MS in src/index.js (30000ms).
+# Matches SHUTDOWN_GRACE_MS in src/index.ts (30000ms).
 terminationGracePeriodSeconds: 35
 
 # The claude.ai sessionKey value. MUST be provided at install time —

@@ -51,7 +51,7 @@ spec:
             - secretRef:
                 name: {{ include "claude-team-proxy.fullname" . }}
           # Non-secret config is plain env. Empty string means "use the
-          # default baked into src/config.js".
+          # default baked into src/config.ts".
           env:
             - name: PORT
               value: {{ .Values.service.port | quote }}

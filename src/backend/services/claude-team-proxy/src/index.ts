@@ -9,20 +9,24 @@
 // The order in 3-4 matters for k8s: readiness probe must not 404 while
 // init is in progress. /health returns 503 "init" until step 4 finishes.
 
+import type { Server } from 'node:http';
+
 import { loadConfig } from './config.js';
+import type { Config } from './config.js';
 import { createTransport } from './transport/index.js';
+import type { AuthedTransport } from './transport/index.js';
 import { createServer } from './server.js';
 import { log } from './log.js';
 
 const SHUTDOWN_GRACE_MS = 30_000;
 
-async function main() {
+async function main(): Promise<void> {
   // 1) Config — throws on bad/missing input, process exits with code 2.
-  let config;
+  let config: Config;
   try {
     config = loadConfig();
   } catch (err) {
-    log.error('config load failed', { error: err.message });
+    log.error('config load failed', { error: (err as Error).message });
     process.exit(2);
   }
   log.info('config loaded', {
@@ -46,7 +50,7 @@ async function main() {
   //    readiness probe needs the socket open immediately. /health
   //    returns 503 until transport is ready.
   const server = createServer(transport);
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(config.port, () => {
       log.info('http server listening', { port: config.port });
@@ -62,7 +66,7 @@ async function main() {
   try {
     await transport.init();
   } catch (err) {
-    log.error('transport.init failed, exiting', { error: err.message });
+    log.error('transport.init failed, exiting', { error: (err as Error).message });
     // Best-effort cleanup. server.close is async but we're exiting
     // anyway; not waiting on it.
     server.close();
@@ -75,14 +79,10 @@ async function main() {
   // explicit loop; node:http keeps the event loop alive.
 }
 
-/**
- * @param {import('node:http').Server} server
- * @param {import('./transport/index.js').AuthedTransport} transport
- */
-function installShutdownHandlers(server, transport) {
+function installShutdownHandlers(server: Server, transport: AuthedTransport): void {
   let shuttingDown = false;
 
-  const handler = async (signal) => {
+  const handler = async (signal: NodeJS.Signals): Promise<void> => {
     if (shuttingDown) {
       log.warn('signal received during shutdown, ignoring', { signal });
       return;
@@ -108,7 +108,7 @@ function installShutdownHandlers(server, transport) {
     try {
       await transport.close();
     } catch (err) {
-      log.error('transport.close error', { error: err.message });
+      log.error('transport.close error', { error: (err as Error).message });
     }
 
     clearTimeout(forceExit);
@@ -121,12 +121,12 @@ function installShutdownHandlers(server, transport) {
 
   // Process-wide error nets. Should never fire in a healthy run —
   // log them loudly so we notice in monitoring.
-  process.on('unhandledRejection', (reason) => {
+  process.on('unhandledRejection', (reason: unknown) => {
     log.error('unhandled promise rejection', {
       reason: reason instanceof Error ? reason.message : String(reason),
     });
   });
-  process.on('uncaughtException', (err) => {
+  process.on('uncaughtException', (err: Error) => {
     log.error('uncaught exception', {
       error: err.message,
       stack: err.stack,
@@ -135,7 +135,7 @@ function installShutdownHandlers(server, transport) {
   });
 }
 
-main().catch((err) => {
+main().catch((err: Error) => {
   log.error('main crashed', { error: err.message, stack: err.stack });
   process.exit(1);
 });

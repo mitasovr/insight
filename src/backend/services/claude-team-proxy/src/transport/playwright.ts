@@ -16,22 +16,29 @@
 
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import type { Browser, BrowserContext, Page } from 'playwright';
 
 import { log } from '../log.js';
+import type { AuthedTransport, FetchOptions, TransportResponse } from './index.js';
 
 chromium.use(StealthPlugin());
 
-/**
- * @param {{
- *   sessionKey: string,
- *   upstreamBaseUrl: string,
- *   headless: boolean,
- *   startupTimeoutMs: number,
- *   fetchTimeoutMs: number,
- * }} cfg
- * @returns {import('./index.js').AuthedTransport}
- */
-export function createPlaywrightTransport(cfg) {
+export interface PlaywrightTransportConfig {
+  sessionKey: string;
+  upstreamBaseUrl: string;
+  headless: boolean;
+  startupTimeoutMs: number;
+  fetchTimeoutMs: number;
+}
+
+// Shape returned from the in-page page.evaluate fetch wrapper. Either
+// a successful response, a timeout signal, or a generic error envelope.
+type EvalResult =
+  | { status: number; body: string; headers: Record<string, string> }
+  | { timeout: true }
+  | { error: string };
+
+export function createPlaywrightTransport(cfg: PlaywrightTransportConfig): AuthedTransport {
   // Derive cookie domain from upstream URL so a mock upstream (e.g.
   // http://localhost:8080) can also receive the cookie. Leading dot
   // is the standard form for whole-domain match on hosts that have
@@ -42,20 +49,37 @@ export function createPlaywrightTransport(cfg) {
 
   // Closure over private state. The returned object is the contract;
   // browser/context/page are intentionally not exposed.
-  let browser = null;
-  let context = null;
-  let page = null;
+  let browser: Browser | null = null;
+  let context: BrowserContext | null = null;
+  let page: Page | null = null;
   let ready = false;
+
+  async function safeClose(): Promise<void> {
+    // Order matters: page → context → browser. Closing browser first
+    // would leave context/page dangling and Playwright complains.
+    if (page) {
+      await page.close().catch(() => {});
+      page = null;
+    }
+    if (context) {
+      await context.close().catch(() => {});
+      context = null;
+    }
+    if (browser) {
+      await browser.close().catch(() => {});
+      browser = null;
+    }
+  }
 
   return {
     kind: 'playwright',
     upstreamBaseUrl: cfg.upstreamBaseUrl,
 
-    isReady() {
+    isReady(): boolean {
       return ready;
     },
 
-    async init() {
+    async init(): Promise<void> {
       if (ready) {
         log.info('transport.init called when already ready, no-op');
         return;
@@ -100,6 +124,7 @@ export function createPlaywrightTransport(cfg) {
         // waitForFunction.
         await page.waitForFunction(
           () => !document.title.includes('Just a moment'),
+          null,
           { timeout: cfg.startupTimeoutMs },
         );
 
@@ -111,7 +136,7 @@ export function createPlaywrightTransport(cfg) {
       } catch (err) {
         log.error('transport.init failed', {
           ms: Date.now() - t0,
-          error: err.message,
+          error: (err as Error).message,
         });
         // Best-effort cleanup; the outer process is likely going to
         // exit anyway, but don't leak chromium if not.
@@ -120,9 +145,9 @@ export function createPlaywrightTransport(cfg) {
       }
     },
 
-    async fetch(url, opts = {}) {
-      if (!ready) {
-        // Caller (server.js) checks isReady() before calling, so this
+    async fetch(url: string, opts: FetchOptions = {}): Promise<TransportResponse> {
+      if (!ready || !page) {
+        // Caller (server.ts) checks isReady() before calling, so this
         // is defensive: should never happen via the HTTP path.
         throw new Error('transport not ready');
       }
@@ -147,7 +172,7 @@ export function createPlaywrightTransport(cfg) {
       // throw on the Node side per the AuthedTransport contract
       // (transport-level failures throw; non-2xx HTTP does not).
       const result = await page.evaluate(
-        async ({ fetchUrl, extraHeaders, timeoutMs }) => {
+        async ({ fetchUrl, extraHeaders, timeoutMs }): Promise<EvalResult> => {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
           try {
@@ -162,7 +187,7 @@ export function createPlaywrightTransport(cfg) {
             // Headers.entries() is iterable; spread into a plain object
             // for transport boundary (page.evaluate output must be JSON-
             // serialisable).
-            const headers = {};
+            const headers: Record<string, string> = {};
             for (const [k, v] of response.headers.entries()) {
               headers[k.toLowerCase()] = v;
             }
@@ -176,10 +201,11 @@ export function createPlaywrightTransport(cfg) {
             // Any other Error (network failure inside the page, DNS, etc.)
             // bubbles a structured error envelope back; Node side
             // translates to a transport-level throw.
-            if (err.name === 'AbortError') {
+            const e = err as { name?: string; message?: string };
+            if (e.name === 'AbortError') {
               return { timeout: true };
             }
-            return { error: err.message || String(err) };
+            return { error: e.message || String(err) };
           } finally {
             clearTimeout(timer);
           }
@@ -187,37 +213,18 @@ export function createPlaywrightTransport(cfg) {
         { fetchUrl: url, extraHeaders: opts.headers ?? {}, timeoutMs: cfg.fetchTimeoutMs },
       );
 
-      if (result.timeout) {
+      if ('timeout' in result) {
         throw new Error(`fetch timeout after ${cfg.fetchTimeoutMs}ms: ${url}`);
       }
-      if (result.error) {
+      if ('error' in result) {
         throw new Error(`fetch failed: ${result.error}`);
       }
       return result;
     },
 
-    async close() {
+    async close(): Promise<void> {
       await safeClose();
       ready = false;
     },
   };
-
-  // ---- helpers (closed over the same vars) ----
-
-  async function safeClose() {
-    // Order matters: page → context → browser. Closing browser first
-    // would leave context/page dangling and Playwright complains.
-    if (page) {
-      await page.close().catch(() => {});
-      page = null;
-    }
-    if (context) {
-      await context.close().catch(() => {});
-      context = null;
-    }
-    if (browser) {
-      await browser.close().catch(() => {});
-      browser = null;
-    }
-  }
 }

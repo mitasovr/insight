@@ -3,31 +3,38 @@
 // rather than "starts then crashes 30s later when something tries to use
 // an undefined value".
 
-/**
- * @typedef {Object} Config
- * @property {string} sessionKey - claude.ai cookie. Required.
- * @property {string} upstreamBaseUrl - base URL to proxy to. Default
- *   "https://claude.ai". Override (e.g. "http://localhost:8080") for
- *   integration tests against a mock server without touching real
- *   claude.ai. Must NOT have trailing slash; the URL is concatenated
- *   with request pathnames that always start with "/".
- * @property {number} port - HTTP server port.
- * @property {boolean} headless - whether to run browser headless.
- *   Default true. Set HEADLESS=false locally to actually see the
- *   browser window while debugging.
- * @property {number} startupTimeoutMs - max time to wait for transport.init()
- *   (browser launch + Cloudflare clearance). Default 60s.
- * @property {number} fetchTimeoutMs - max time to wait for a single upstream
- *   fetch via page.evaluate. Bounded so a stalled upstream cannot leave a
- *   request indefinitely in-flight. Default 45s — covers the observed
- *   worst-case (claude.ai's /api/claude_code/metrics_aggs/users at ~13s)
- *   with generous headroom.
- */
+export interface Config {
+  /** claude.ai cookie. Required. */
+  sessionKey: string;
+  /**
+   * Base URL to proxy to. Default "https://claude.ai". Override (e.g.
+   * "http://localhost:8080") for integration tests against a mock server
+   * without touching real claude.ai. Must NOT have trailing slash; the
+   * URL is concatenated with request pathnames that always start with "/".
+   */
+  upstreamBaseUrl: string;
+  /** HTTP server port. */
+  port: number;
+  /**
+   * Whether to run browser headless. Default true. Set HEADLESS=false
+   * locally to actually see the browser window while debugging.
+   */
+  headless: boolean;
+  /**
+   * Max time to wait for transport.init() (browser launch + Cloudflare
+   * clearance). Default 60s.
+   */
+  startupTimeoutMs: number;
+  /**
+   * Max time to wait for a single upstream fetch via page.evaluate.
+   * Bounded so a stalled upstream cannot leave a request indefinitely
+   * in-flight. Default 45s — covers the observed worst-case (claude.ai's
+   * /api/claude_code/metrics_aggs/users at ~13s) with generous headroom.
+   */
+  fetchTimeoutMs: number;
+}
 
-/**
- * @returns {Config}
- */
-export function loadConfig() {
+export function loadConfig(): Config {
   const sessionKey = process.env.SESSION_KEY;
   if (!sessionKey) {
     throw new Error('SESSION_KEY is required (claude.ai cookie value)');
@@ -47,11 +54,10 @@ export function loadConfig() {
   return { sessionKey, upstreamBaseUrl, port, headless, startupTimeoutMs, fetchTimeoutMs };
 }
 
-function parseUrlEnv(name, defaultValue) {
+function parseUrlEnv(name: string, defaultValue: string): string {
   const raw = process.env[name] ?? defaultValue;
-  let parsed;
   try {
-    parsed = new URL(raw);
+    new URL(raw);
   } catch {
     throw new Error(`${name} must be a valid URL, got: ${raw}`);
   }
@@ -61,7 +67,7 @@ function parseUrlEnv(name, defaultValue) {
   return raw.replace(/\/+$/, '');
 }
 
-function parseIntEnv(name, defaultValue) {
+function parseIntEnv(name: string, defaultValue: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return defaultValue;
   const n = Number(raw);
@@ -71,7 +77,7 @@ function parseIntEnv(name, defaultValue) {
   return n;
 }
 
-function parseBoolEnv(name, defaultValue) {
+function parseBoolEnv(name: string, defaultValue: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return defaultValue;
   if (['1', 'true', 'yes', 'on'].includes(raw.toLowerCase())) return true;

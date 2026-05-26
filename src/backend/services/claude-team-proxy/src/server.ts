@@ -13,19 +13,18 @@
 //   - any other exception    -> 500 (last-resort safety net)
 
 import http from 'node:http';
+import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 
 import { log } from './log.js';
+import type { AuthedTransport } from './transport/index.js';
 
 /**
  * Create an http.Server bound to a transport. The server does not own
- * the transport lifecycle — index.js does init() + close() around it.
- *
- * @param {import('./transport/index.js').AuthedTransport} transport
- * @returns {import('node:http').Server}
+ * the transport lifecycle — index.ts does init() + close() around it.
  */
-export function createServer(transport) {
+export function createServer(transport: AuthedTransport): Server {
   return http.createServer((req, res) => {
-    handle(req, res, transport).catch((err) => {
+    handle(req, res, transport).catch((err: Error) => {
       // Last-resort safety net. Should never reach here unless handle()
       // itself throws synchronously, which it shouldn't.
       log.error('handler unhandled', { error: err.message, stack: err.stack });
@@ -36,12 +35,11 @@ export function createServer(transport) {
   });
 }
 
-/**
- * @param {import('node:http').IncomingMessage} req
- * @param {import('node:http').ServerResponse} res
- * @param {import('./transport/index.js').AuthedTransport} transport
- */
-async function handle(req, res, transport) {
+async function handle(
+  req: IncomingMessage,
+  res: ServerResponse,
+  transport: AuthedTransport,
+): Promise<void> {
   if (req.method !== 'GET') {
     return respond(res, 405, { error: 'method not allowed', method: req.method });
   }
@@ -66,9 +64,9 @@ async function handle(req, res, transport) {
  * Health endpoint — synchronous (no async I/O) so it's safe to hit at
  * high frequency from k8s probes.
  */
-function handleHealth(res, transport) {
+function handleHealth(res: ServerResponse, transport: AuthedTransport): void {
   const ready = transport.isReady();
-  return respond(res, ready ? 200 : 503, {
+  respond(res, ready ? 200 : 503, {
     status: ready ? 'ok' : 'init',
     ready,
     transport: transport.kind,
@@ -78,7 +76,11 @@ function handleHealth(res, transport) {
 /**
  * Proxy /api/* to upstream. Pass through status+body verbatim.
  */
-async function handleProxy(res, transport, reqUrl) {
+async function handleProxy(
+  res: ServerResponse,
+  transport: AuthedTransport,
+  reqUrl: URL,
+): Promise<void> {
   if (!transport.isReady()) {
     return respond(res, 503, {
       error: 'transport not ready',
@@ -96,16 +98,17 @@ async function handleProxy(res, transport, reqUrl) {
   try {
     result = await transport.fetch(upstreamUrl);
   } catch (err) {
+    const e = err as Error;
     log.error('transport.fetch failed', {
       upstream: upstreamUrl,
-      error: err.message,
+      error: e.message,
     });
     // Distinguish timeout (504) from generic transport failure (502)
     // so callers can apply different retry/backoff policies.
-    const isTimeout = err.message?.startsWith('fetch timeout');
+    const isTimeout = e.message?.startsWith('fetch timeout');
     return respond(res, isTimeout ? 504 : 502, {
       error: isTimeout ? 'upstream timeout' : 'upstream unreachable',
-      detail: err.message,
+      detail: e.message,
     });
   }
   const ms = Date.now() - t0;
@@ -135,7 +138,7 @@ async function handleProxy(res, transport, reqUrl) {
  * Write a JSON response with the given status. Used for all server-
  * generated responses (not proxy passthrough).
  */
-function respond(res, status, body) {
+function respond(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify(body));
