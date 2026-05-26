@@ -152,6 +152,7 @@ dependencies = [
  "cf-modkit-canonical-errors",
  "chrono",
  "clap",
+ "clickhouse",
  "figment",
  "futures",
  "insight-clickhouse",

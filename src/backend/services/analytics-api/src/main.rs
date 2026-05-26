@@ -89,21 +89,38 @@ async fn run_server(cfg: config::AppConfig) -> anyhow::Result<()> {
     // Identity client
     let identity = infra::identity::IdentityClient::new(&cfg.identity_url);
 
+    // Build the schema-validator (Refs #521). The validator is held in
+    // AppState (so admin-crud can call its per-write hook from #525) and
+    // also cloned into a post-readiness background task that runs the
+    // startup pass.
+    let validator = domain::schema_validator::SchemaValidator::new(db.clone(), ch.clone());
+
     // Build app state
     let state = api::AppState {
         db,
         ch,
         identity,
         config: cfg.clone(),
+        validator: validator.clone(),
     };
 
     // Build router
     let app = api::router(state);
 
-    // Start server
+    // Start server. The HTTP listener binds first — `/health` returns 200
+    // unconditionally, so readiness is satisfied before the validator's
+    // first ClickHouse call. This is the load-bearing "post-readiness"
+    // requirement of `cpt-metric-cat-component-schema-validator`: a
+    // ClickHouse outage at boot must NOT block deploys or restart-storm
+    // the service.
     let addr = cfg.bind_addr.parse::<std::net::SocketAddr>()?;
     tracing::info!(addr = %addr, "listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    tokio::spawn(async move {
+        validator.validate_all().await;
+    });
+
     axum::serve(listener, app).await?;
 
     Ok(())

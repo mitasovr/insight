@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::auth;
 use crate::config::AppConfig;
+use crate::domain::schema_validator::SchemaValidator;
 use crate::infra::identity::IdentityClient;
 
 /// Shared application state.
@@ -19,6 +20,11 @@ pub struct AppState {
     pub identity: IdentityClient,
     #[allow(dead_code)] // will be used for runtime config access (rate limits, feature flags)
     pub config: AppConfig,
+    /// Schema-validator (Refs #521). Held in `AppState` so admin-crud (#525)
+    /// can call `validator.validate(metric_key)` after a successful threshold
+    /// write. Not currently consumed by any handler in this PR.
+    #[allow(dead_code)] // wired in #525; #521 only exposes the function
+    pub validator: SchemaValidator,
 }
 
 /// Build the Axum router with all routes.
