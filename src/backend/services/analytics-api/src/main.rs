@@ -71,6 +71,13 @@ async fn run_server(cfg: config::AppConfig) -> anyhow::Result<()> {
     // Run pending migrations
     infra::db::run_migrations(&db).await?;
 
+    // Refuse to start if any required CHECK constraint is missing. Our
+    // bitnami-shipped MariaDB is 11.x, but on customer-managed DBs (BYO-DB
+    // installs, RDS, Cloud SQL, on-prem) we can't audit the version or
+    // `sql_mode`. See `infra/db/check_probe` and DESIGN §2.2
+    // `cpt-metric-cat-constraint-mariadb-check` for the full rationale.
+    infra::db::check_probe::assert_required_checks(&db).await?;
+
     // Connect to ClickHouse
     let mut ch_config =
         insight_clickhouse::Config::new(&cfg.clickhouse_url, &cfg.clickhouse_database);
@@ -106,6 +113,14 @@ async fn run_migrate(cfg: config::AppConfig) -> anyhow::Result<()> {
     tracing::info!("running migrations");
     let db = infra::db::connect(&cfg.database_url).await?;
     infra::db::run_migrations(&db).await?;
+
+    // Same probe as `run_server`. An operator running `analytics-api migrate`
+    // after a schema rollback wants the integrity signal too — the typical
+    // recovery path is `migrate` first, restart the service second, and
+    // dropping the probe here would silently re-greenlight a DB that's
+    // missing a CHECK the application relies on.
+    infra::db::check_probe::assert_required_checks(&db).await?;
+
     tracing::info!("migrations complete");
     Ok(())
 }
