@@ -85,6 +85,8 @@ public sealed class MariaDbFixture : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         await using (var cmd = new MySqlCommand("DELETE FROM account_person_map", conn))
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        await using (var cmd = new MySqlCommand("DELETE FROM operations", conn))
+            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         await using (var cmd = new MySqlCommand(
             "DELETE FROM roles WHERE role_id <> @admin_id",
             conn))
@@ -109,6 +111,8 @@ public sealed class MariaDbFixture : IAsyncLifetime
         await using (var cmd = new MySqlCommand(PersonRolesDdl, conn))
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         await using (var cmd = new MySqlCommand(AccountPersonMapDdl, conn))
+            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        await using (var cmd = new MySqlCommand(OperationsDdl, conn))
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         await using (var cmd = new MySqlCommand(AdminRoleSeed, conn))
         {
@@ -174,6 +178,26 @@ public sealed class MariaDbFixture : IAsyncLifetime
             name    VARCHAR(64) NOT NULL,
             PRIMARY KEY (role_id),
             UNIQUE KEY uk_name (name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """;
+
+    // Mirror of Migrations/011_operations.sql.
+    private const string OperationsDdl = """
+        CREATE TABLE IF NOT EXISTS operations (
+            operation_id      BINARY(16)   NOT NULL,
+            operation_type    VARCHAR(64)  NOT NULL,
+            status            VARCHAR(16)  NOT NULL,
+            insight_tenant_id BINARY(16)   NOT NULL,
+            author_person_id  BINARY(16)   NOT NULL,
+            request_json      JSON         NULL,
+            summary_json      JSON         NULL,
+            error_message     TEXT         NULL,
+            started_at        DATETIME(6)  NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+            completed_at      DATETIME(6)  NULL,
+            PRIMARY KEY (operation_id),
+            INDEX idx_status      (status, started_at),
+            INDEX idx_tenant_type (insight_tenant_id, operation_type, started_at),
+            INDEX idx_author      (author_person_id, started_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """;
 
