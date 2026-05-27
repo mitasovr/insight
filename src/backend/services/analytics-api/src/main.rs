@@ -23,6 +23,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use crate::domain::auth::ConfigTenantAuthorization;
+use crate::infra::cache::catalog_cache::{CatalogCache, NoopCatalogCache};
 
 /// Analytics API service.
 #[derive(Parser)]
@@ -81,6 +82,24 @@ async fn run_server(cfg: config::AppConfig) -> anyhow::Result<()> {
     // `sql_mode`. See `infra/db/check_probe` and DESIGN §2.2
     // `cpt-metric-cat-constraint-mariadb-check` for the full rationale.
     infra::db::check_probe::assert_required_checks(&db).await?;
+
+    // Refuse to start if any enabled `metric_catalog` row is missing its
+    // `product-default` `metric_threshold` floor (Refs #523). The resolver
+    // walks down to product-default; a missing floor would make the
+    // catalog read return no threshold and break the byte-for-byte
+    // bullet-rendering gate. See `infra/db/product_default_probe` and
+    // DESIGN §3.6 + `cpt-metric-cat-fr-tenant-thresholds`.
+    infra::db::product_default_probe::assert_product_default_present(&db).await?;
+
+    // Flush the catalog cache so newly seeded rows are visible on the
+    // next `POST /catalog/get_metrics` read without waiting for the TTL.
+    // v1 is a no-op stub (#523); #524 swaps in the real `cat:v1:*` Redis
+    // prefix purge. The flush is best-effort — a Redis blip MUST NOT
+    // gate service boot, so failures are logged and ignored.
+    let catalog_cache: Arc<dyn CatalogCache> = Arc::new(NoopCatalogCache);
+    if let Err(e) = catalog_cache.flush_all().await {
+        tracing::warn!(error = %e, "catalog_cache: flush_all failed at boot; continuing");
+    }
 
     // Connect to ClickHouse
     let mut ch_config =
@@ -148,6 +167,24 @@ async fn run_migrate(cfg: config::AppConfig) -> anyhow::Result<()> {
     // dropping the probe here would silently re-greenlight a DB that's
     // missing a CHECK the application relies on.
     infra::db::check_probe::assert_required_checks(&db).await?;
+
+    // Same rationale for the product-default probe: an operator running
+    // `migrate` standalone wants to know immediately if the seed left the
+    // catalog with orphaned enabled rows.
+    infra::db::product_default_probe::assert_product_default_present(&db).await?;
+
+    // DESIGN §3.6's seed-migration sequence ends with
+    // `cache_layer.flush_all() → ack`. Operators who run `analytics-api
+    // migrate` as a standalone step (e.g., a one-shot Kubernetes Job, a
+    // post-deploy hook) need the same flush — otherwise the seed lands
+    // and the cache stays stale until something triggers a server boot.
+    // No-op today; activates with the Redis impl from #524. Best-effort
+    // per the same rationale as `run_server` — never block migrate on a
+    // Redis blip.
+    let catalog_cache: Arc<dyn CatalogCache> = Arc::new(NoopCatalogCache);
+    if let Err(e) = catalog_cache.flush_all().await {
+        tracing::warn!(error = %e, "catalog_cache: flush_all failed after migrate; continuing");
+    }
 
     tracing::info!("migrations complete");
     Ok(())

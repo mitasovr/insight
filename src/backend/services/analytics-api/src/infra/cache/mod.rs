@@ -12,3 +12,5 @@
 // 1. Most queries won't filter by person_id
 // 2. Person ID resolution is fast (ClickHouse lookup in Identity Resolution)
 // 3. Redis adds deployment complexity for MVP
+
+pub mod catalog_cache;

@@ -14,6 +14,7 @@ mod m20260520_000001_code_quality_bullet_rewrite;
 mod m20260522_000001_metric_catalog;
 mod m20260522_000002_metric_threshold;
 mod m20260522_000003_threshold_lock_audit;
+mod m20260527_000001_seed_metric_catalog;
 
 #[cfg(test)]
 mod live_tests;
@@ -40,6 +41,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260522_000001_metric_catalog::Migration),
             Box::new(m20260522_000002_metric_threshold::Migration),
             Box::new(m20260522_000003_threshold_lock_audit::Migration),
+            Box::new(m20260527_000001_seed_metric_catalog::Migration),
         ]
     }
 }

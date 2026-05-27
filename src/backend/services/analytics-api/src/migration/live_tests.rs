@@ -22,10 +22,15 @@ use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, Sta
 use sea_orm_migration::MigratorTrait;
 
 use super::{Migrator, REQUIRED_CHECKS_BY_TABLE};
-use crate::infra::db::check_probe;
+use crate::infra::db::{check_probe, product_default_probe};
 
 const ENV_VAR: &str = "MARIADB_URL";
 const TEST_METRIC_KEY: &str = "analytics_metrics.tasks_closed";
+
+/// Expected catalog row count produced by `m20260527_000001_seed_metric_catalog`.
+/// Pinned here so the live DB test catches drift between the seed SEEDS array
+/// and the rendered state without re-importing the const.
+const EXPECTED_SEED_ROW_COUNT: i64 = 69;
 
 async fn connect_or_skip() -> Option<DatabaseConnection> {
     let Ok(url) = std::env::var(ENV_VAR) else {
@@ -56,8 +61,17 @@ async fn drop_catalog_tables(db: &DatabaseConnection) -> Result<(), sea_orm::DbE
     // `seaql_migrations` cleanup failures and produce misleading downstream
     // assertion failures when the probe saw migration rows out of sync with
     // the actual schema).
-    db.execute_unprepared("DELETE FROM seaql_migrations WHERE version LIKE 'm20260522_%'")
-        .await?;
+    //
+    // Covers both the schema migrations (`m20260522_*`: catalog, threshold,
+    // audit) and the seed migration (`m20260527_*`: Refs #523). Any future
+    // catalog-domain migration must extend this OR pattern — otherwise a
+    // partial replay leaves catalog tables empty (schema reapplied, seed
+    // skipped) and downstream invariants break in confusing ways.
+    db.execute_unprepared(
+        "DELETE FROM seaql_migrations \
+         WHERE version LIKE 'm20260522_%' OR version LIKE 'm20260527_%'",
+    )
+    .await?;
     Ok(())
 }
 
@@ -279,7 +293,7 @@ async fn catalog_schema_end_to_end() -> anyhow::Result<()> {
     .await?;
     match check_probe::assert_required_checks(&db).await {
         Ok(()) => {
-            failures.push("probe MUST refuse to start when a required CHECK is missing".to_owned())
+            failures.push("probe MUST refuse to start when a required CHECK is missing".to_owned());
         }
         Err(e) => {
             let msg = format!("{e:#}");
@@ -368,5 +382,175 @@ async fn insert_product_default_threshold(
         [Value::from(metric_key)],
     ))
     .await?;
+    Ok(())
+}
+
+/// End-to-end live test for the seed migration + product-default probe
+/// (Refs #523). Mirrors the `catalog_schema_end_to_end` skip-when-unset
+/// pattern. Asserts:
+///
+/// 1. Fresh `Migrator::up` lands `EXPECTED_SEED_ROW_COUNT` catalog rows
+///    (all `tenant_id IS NULL`).
+/// 2. Same count of `product-default` `metric_threshold` rows (all
+///    `tenant_id IS NULL`, `role_slug = ''`, `team_id = ''`).
+/// 3. Every catalog row's `metric_key` matches a threshold row's
+///    `metric_key` (1:1 pairing — no orphans either direction).
+/// 4. `product_default_probe::assert_product_default_present` returns
+///    `Ok` against the freshly seeded DB.
+/// 5. Deleting one `product-default` row → probe returns `Err` whose
+///    message names the orphaned `metric_key` (so an operator can find
+///    and fix it from the log line).
+#[tokio::test]
+#[ignore = "requires live MariaDB 10.3+; set MARIADB_URL to enable"]
+#[allow(clippy::too_many_lines)]
+async fn seed_migration_and_product_default_probe_end_to_end() -> anyhow::Result<()> {
+    let Some(db) = connect_or_skip().await else {
+        return Ok(());
+    };
+
+    drop_catalog_tables(&db).await?;
+    Migrator::up(&db, None).await?;
+
+    let mut failures: Vec<String> = Vec::new();
+
+    // ── invariant 1: catalog row count + tenant_id IS NULL ───────────
+    let catalog_count = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS c FROM metric_catalog WHERE tenant_id IS NULL",
+            [],
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no row from metric_catalog COUNT"))?
+        .try_get::<i64>("", "c")?;
+    if catalog_count != EXPECTED_SEED_ROW_COUNT {
+        failures.push(format!(
+            "metric_catalog expected {EXPECTED_SEED_ROW_COUNT} NULL-tenant rows, got {catalog_count}"
+        ));
+    }
+
+    // Defense in depth: also confirm no non-null tenant rows landed
+    // (the v1 CHECK should prevent it, but pin behaviour).
+    let nonnull_tenant_count = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS c FROM metric_catalog WHERE tenant_id IS NOT NULL",
+            [],
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no row from non-null tenant COUNT"))?
+        .try_get::<i64>("", "c")?;
+    if nonnull_tenant_count != 0 {
+        failures.push(format!(
+            "seed must only insert tenant_id IS NULL rows; \
+             found {nonnull_tenant_count} with non-null tenant"
+        ));
+    }
+
+    // ── invariant 2: product-default threshold row count ─────────────
+    let threshold_count = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS c FROM metric_threshold \
+             WHERE scope = 'product-default' AND tenant_id IS NULL \
+               AND role_slug = '' AND team_id = ''",
+            [],
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no row from threshold COUNT"))?
+        .try_get::<i64>("", "c")?;
+    if threshold_count != EXPECTED_SEED_ROW_COUNT {
+        failures.push(format!(
+            "metric_threshold product-default expected {EXPECTED_SEED_ROW_COUNT} rows, \
+             got {threshold_count}"
+        ));
+    }
+
+    // ── invariant 3: 1:1 pairing between catalog and product-default
+    // thresholds — no orphans either direction.
+    let orphan_catalog = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS c FROM metric_catalog mc \
+             LEFT JOIN metric_threshold mt \
+               ON mt.metric_key = mc.metric_key \
+              AND mt.scope = 'product-default' \
+              AND mt.tenant_id IS NULL \
+             WHERE mt.id IS NULL",
+            [],
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no row from orphan-catalog COUNT"))?
+        .try_get::<i64>("", "c")?;
+    if orphan_catalog != 0 {
+        failures.push(format!(
+            "catalog rows missing matching product-default threshold: {orphan_catalog}"
+        ));
+    }
+
+    let orphan_threshold = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS c FROM metric_threshold mt \
+             LEFT JOIN metric_catalog mc ON mc.metric_key = mt.metric_key \
+             WHERE mt.scope = 'product-default' \
+               AND mt.tenant_id IS NULL \
+               AND mc.id IS NULL",
+            [],
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no row from orphan-threshold COUNT"))?
+        .try_get::<i64>("", "c")?;
+    if orphan_threshold != 0 {
+        failures.push(format!(
+            "product-default thresholds with no matching catalog row: {orphan_threshold}"
+        ));
+    }
+
+    // ── invariant 4: probe is green against the freshly seeded DB ────
+    if let Err(e) = product_default_probe::assert_product_default_present(&db).await {
+        failures.push(format!(
+            "product_default_probe MUST pass against freshly seeded DB; got: {e:#}"
+        ));
+    }
+
+    // ── invariant 5: probe fails with the offending metric_key in
+    // the message after we DELETE one product-default row. Pick an
+    // `ic_kpis.*` row — those are the ones the FE will hit first via
+    // the IC KPI strip, so we want the probe to catch a manual
+    // recovery DELETE there too.
+    let removed_metric_key = "ic_kpis.tasks_closed";
+    db.execute(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "DELETE FROM metric_threshold \
+         WHERE scope = 'product-default' AND tenant_id IS NULL AND metric_key = ?",
+        [Value::from(removed_metric_key)],
+    ))
+    .await?;
+    match product_default_probe::assert_product_default_present(&db).await {
+        Ok(()) => failures.push(
+            "probe MUST refuse to start when a product-default row is missing \
+             for an enabled metric"
+                .to_owned(),
+        ),
+        Err(e) => {
+            let msg = format!("{e:#}");
+            if !msg.contains(removed_metric_key) {
+                failures.push(format!(
+                    "probe error must name the missing metric_key {removed_metric_key:?}; \
+                     got: {msg}"
+                ));
+            }
+        }
+    }
+
+    let cleanup = drop_catalog_tables(&db).await.map_err(anyhow::Error::from);
+
+    anyhow::ensure!(
+        failures.is_empty(),
+        "live test failures:\n  - {}",
+        failures.join("\n  - ")
+    );
+    cleanup?;
     Ok(())
 }
