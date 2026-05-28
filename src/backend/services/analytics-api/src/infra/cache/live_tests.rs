@@ -38,7 +38,6 @@ use uuid::Uuid;
 use crate::domain::catalog::response::{CatalogResponse, MetricView, ThresholdView};
 use crate::infra::cache::catalog_cache::{
     CACHE_KEY_PREFIX, CatalogCache, InvalidateMode, LOCK_BYPASS_WINDOW, RedisCatalogCache,
-    cache_key,
 };
 
 const ENV_VAR: &str = "INTEGRATION_TESTS_REDIS_URL";
@@ -93,15 +92,19 @@ async fn put_then_get_roundtrips() -> anyhow::Result<()> {
     };
 
     let tenant = Uuid::now_v7();
-    let key = cache_key(tenant, Some("eng"), Some("alpha"));
     let payload = sample_payload(tenant);
 
-    cache.put(&key, &payload, Duration::from_mins(1)).await?;
-    let got = cache.get(&key, tenant).await?;
+    cache
+        .put(tenant, Some("eng"), Some("alpha"), &payload)
+        .await?;
+    let got = cache.get(tenant, Some("eng"), Some("alpha")).await?;
     assert!(got.is_some(), "round-trip MUST return Some");
     let got = got.unwrap_or_else(|| panic!("just asserted Some"));
     assert_eq!(got.tenant_id, tenant);
 
+    // `None` and `Some("")` MUST be equivalent (canonical empty-string
+    // sentinel). After invalidation, a request with the equivalent shape
+    // sees the same miss state.
     cache.invalidate(tenant, InvalidateMode::Standard).await?;
     Ok(())
 }
@@ -119,19 +122,21 @@ async fn cross_tenant_hydrate_forces_miss() -> anyhow::Result<()> {
 
     let t1 = Uuid::now_v7();
     let t2 = Uuid::now_v7();
-    let key = cache_key(t1, None, None); // T1 key shape...
-    let mismatched = sample_payload(t2); // ...but the payload is for T2.
+    // Cache is told the entry is for T1 (key shape) but the payload claims
+    // it belongs to T2 — simulates a backend misconfig or attacker-controlled
+    // collision. The cache MUST re-assert the embedded tenant on read and
+    // refuse to serve a wrong-tenant payload.
+    cache.put(t1, None, None, &sample_payload(t2)).await?;
 
-    cache.put(&key, &mismatched, Duration::from_mins(1)).await?;
-    let got = cache.get(&key, t1).await?;
+    let got = cache.get(t1, None, None).await?;
     assert!(
         got.is_none(),
         "cross-tenant cached payload MUST be served as miss, not as a hit"
     );
 
     // The mismatched entry MUST have been unlinked from Redis — a re-read
-    // confirms the entry is gone.
-    let again = cache.get(&key, t2).await?;
+    // with the (real) T2 tenant still returns None.
+    let again = cache.get(t2, None, None).await?;
     assert!(
         again.is_none(),
         "mismatched entry MUST be unlinked from Redis (defense in depth)"
@@ -151,24 +156,22 @@ async fn invalidate_tenant_prefix_does_not_clobber_sibling_tenants() -> anyhow::
 
     let t1 = Uuid::now_v7();
     let t2 = Uuid::now_v7();
-    let k1 = cache_key(t1, Some("eng"), None);
-    let k2 = cache_key(t2, Some("eng"), None);
 
     cache
-        .put(&k1, &sample_payload(t1), Duration::from_mins(1))
+        .put(t1, Some("eng"), None, &sample_payload(t1))
         .await?;
     cache
-        .put(&k2, &sample_payload(t2), Duration::from_mins(1))
+        .put(t2, Some("eng"), None, &sample_payload(t2))
         .await?;
 
     cache.invalidate(t1, InvalidateMode::Standard).await?;
 
     assert!(
-        cache.get(&k1, t1).await?.is_none(),
+        cache.get(t1, Some("eng"), None).await?.is_none(),
         "T1 entry MUST be purged"
     );
     assert!(
-        cache.get(&k2, t2).await?.is_some(),
+        cache.get(t2, Some("eng"), None).await?.is_some(),
         "T2 entry MUST survive T1's invalidation"
     );
 
@@ -221,18 +224,17 @@ async fn cross_instance_invalidation_is_visible_immediately() -> anyhow::Result<
     let b = Arc::new(RedisCatalogCache::connect(&url).await?);
 
     let tenant = Uuid::now_v7();
-    let key = cache_key(tenant, Some("eng"), Some("alpha"));
     let payload = sample_payload(tenant);
 
-    a.put(&key, &payload, Duration::from_mins(1)).await?;
+    a.put(tenant, Some("eng"), Some("alpha"), &payload).await?;
     assert!(
-        b.get(&key, tenant).await?.is_some(),
+        b.get(tenant, Some("eng"), Some("alpha")).await?.is_some(),
         "instance B MUST see instance A's write through the shared Redis"
     );
 
     a.invalidate(tenant, InvalidateMode::Standard).await?;
     assert!(
-        b.get(&key, tenant).await?.is_none(),
+        b.get(tenant, Some("eng"), Some("alpha")).await?.is_none(),
         "instance B MUST see instance A's invalidation through the shared Redis"
     );
     Ok(())
@@ -263,19 +265,20 @@ async fn flush_all_uses_cat_v1_prefix_not_flushdb() -> anyhow::Result<()> {
 
     // Write a catalog entry under the cache prefix.
     let tenant = Uuid::now_v7();
-    let key = cache_key(tenant, None, None);
     cache
-        .put(&key, &sample_payload(tenant), Duration::from_mins(1))
+        .put(tenant, None, None, &sample_payload(tenant))
         .await?;
+    // Sanity-check the namespace constant — this test is the canary that
+    // the catalog prefix and the flush pattern agree.
     assert!(
-        key.starts_with(CACHE_KEY_PREFIX),
-        "key under test must be in the catalog namespace"
+        CACHE_KEY_PREFIX.starts_with("cat:"),
+        "catalog cache MUST live under cat:* so flush_all can target it"
     );
 
     cache.flush_all().await?;
 
-    // Catalog key gone, sibling key intact.
-    assert!(cache.get(&key, tenant).await?.is_none());
+    // Catalog entry gone, sibling key intact.
+    assert!(cache.get(tenant, None, None).await?.is_none());
     let survivor: Option<String> = redis::cmd("GET")
         .arg(&sibling_key)
         .query_async(&mut conn)

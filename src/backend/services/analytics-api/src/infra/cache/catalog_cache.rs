@@ -52,10 +52,13 @@ use crate::domain::catalog::response::CatalogResponse;
 /// admin-write invalidations both walk.
 pub const CACHE_KEY_PREFIX: &str = "cat:v1:";
 
-/// Default per-entry TTL. PRD §5.3 `cpt-metric-cat-fr-cache` mandates 5 minutes;
-/// admin writes invalidate ahead of TTL so users don't observe "I changed the
-/// threshold, nothing happened" stale-read gap.
-pub const DEFAULT_TTL: Duration = Duration::from_mins(5);
+/// Default per-entry TTL — internal to this module. PRD §5.3
+/// `cpt-metric-cat-fr-cache` mandates 5 minutes; admin writes invalidate
+/// ahead of TTL so users don't observe "I changed the threshold, nothing
+/// happened" stale-read gap. The constant is `pub(super)` only so the
+/// live-test module in this `infra/cache/` directory can verify TTL
+/// behavior; nothing outside the cache layer should care.
+pub(super) const DEFAULT_TTL: Duration = Duration::from_mins(5);
 
 /// Lock-event synchronous-bypass window — `2 ×` the cross-replica-invalidation
 /// NFR p99 (2 s) per DESIGN §3.2 cache-layer.
@@ -76,12 +79,24 @@ pub enum InvalidateMode {
 
 /// Catalog cache trait — abstracts the Redis (or future pub-sub) backend so
 /// the reader and admin paths don't depend on a concrete client.
+///
+/// **Cache-key shape is the cache's internal contract.** Callers pass the
+/// request context — `(tenant_id, role_slug, team_id)` — and the cache
+/// derives the key. Surfacing the key would force every caller to agree on
+/// the encoding, and a future change to the key shape (e.g., a new segment
+/// for a request flag) would ripple to every call site. Hiding the key
+/// behind the trait keeps the encoding change a single-file refactor.
 #[async_trait]
 pub trait CatalogCache: Send + Sync {
-    /// Fetch a cached response. The cache re-asserts the embedded `tenant_id`
-    /// against `requesting_tenant_id`; a mismatch logs a security warning and
-    /// returns `None` (cache miss). Returns `Ok(None)` on miss; surfaces
-    /// connection / decode failures as `Err`.
+    /// Fetch a cached response for `(tenant_id, role_slug, team_id)`. The
+    /// cache re-asserts the embedded `tenant_id` against `tenant_id` on
+    /// hydrate; a mismatch logs a security warning, drops the offending
+    /// entry, and returns `None` (cache miss). Returns `Ok(None)` on miss;
+    /// surfaces connection / decode failures as `Err`.
+    ///
+    /// `None` and `Some("")` for `role_slug` / `team_id` are equivalent
+    /// (canonical empty-string sentinel) — the same convention as the DB
+    /// UNIQUE composite from #519.
     ///
     /// # Errors
     ///
@@ -90,17 +105,31 @@ pub trait CatalogCache: Send + Sync {
     /// read endpoint.
     async fn get(
         &self,
-        key: &str,
-        requesting_tenant_id: Uuid,
+        tenant_id: Uuid,
+        role_slug: Option<&str>,
+        team_id: Option<&str>,
     ) -> anyhow::Result<Option<CatalogResponse>>;
 
-    /// Store a response under `key` with `ttl`.
+    /// Store a response under `(tenant_id, role_slug, team_id)` using the
+    /// cache's configured TTL (5 minutes per
+    /// `cpt-metric-cat-fr-cache`). Callers do NOT pass a TTL — the cache
+    /// owns the policy.
+    ///
+    /// `tenant_id` in the key MUST match `payload.tenant_id`; the cache
+    /// uses `payload.tenant_id` as the authoritative tenant for the
+    /// embedded-tenant-id round trip.
     ///
     /// # Errors
     ///
     /// Surfaces Redis transport / encode failures. As with [`Self::get`],
     /// callers treat errors as "skip cache; serve resolver result anyway".
-    async fn put(&self, key: &str, payload: &CatalogResponse, ttl: Duration) -> anyhow::Result<()>;
+    async fn put(
+        &self,
+        tenant_id: Uuid,
+        role_slug: Option<&str>,
+        team_id: Option<&str>,
+        payload: &CatalogResponse,
+    ) -> anyhow::Result<()>;
 
     /// Tenant-prefix purge (`SCAN cat:v1:{tenant_id}:* + UNLINK`). When `mode`
     /// is [`InvalidateMode::Lock`], also opens the 5 s synchronous-bypass
@@ -130,10 +159,11 @@ pub trait CatalogCache: Send + Sync {
     fn should_skip(&self, tenant_id: Uuid) -> bool;
 }
 
-/// Build the canonical cache key. `None` and `Some("")` map to the same key
-/// (canonical empty-string sentinel — see module docs).
+/// Build the canonical cache key — internal to this module. `None` and
+/// `Some("")` map to the same key (canonical empty-string sentinel — see
+/// module docs).
 #[must_use]
-pub fn cache_key(tenant_id: Uuid, role_slug: Option<&str>, team_id: Option<&str>) -> String {
+fn cache_key(tenant_id: Uuid, role_slug: Option<&str>, team_id: Option<&str>) -> String {
     let role = url_safe_encode(role_slug.unwrap_or(""));
     let team = url_safe_encode(team_id.unwrap_or(""));
     // `Uuid::hyphenated` is always 36 lowercase chars — deterministic regardless
@@ -275,17 +305,19 @@ impl RedisCatalogCache {
 impl CatalogCache for RedisCatalogCache {
     async fn get(
         &self,
-        key: &str,
-        requesting_tenant_id: Uuid,
+        tenant_id: Uuid,
+        role_slug: Option<&str>,
+        team_id: Option<&str>,
     ) -> anyhow::Result<Option<CatalogResponse>> {
+        let key = cache_key(tenant_id, role_slug, team_id);
         let mut conn = self.conn.clone();
-        let raw: Option<Vec<u8>> = conn.get(key).await?;
+        let raw: Option<Vec<u8>> = conn.get(&key).await?;
         let Some(raw) = raw else {
             return Ok(None);
         };
         match serde_json::from_slice::<CatalogResponse>(&raw) {
             Ok(payload) => {
-                if payload.tenant_id == requesting_tenant_id {
+                if payload.tenant_id == tenant_id {
                     Ok(Some(payload))
                 } else {
                     // Defense in depth — the key already encodes tenant; a
@@ -296,11 +328,11 @@ impl CatalogCache for RedisCatalogCache {
                     tracing::warn!(
                         cache_key = %key,
                         embedded_tenant = %payload.tenant_id,
-                        requesting_tenant = %requesting_tenant_id,
+                        requesting_tenant = %tenant_id,
                         "catalog_cache: tenant_id mismatch on hydrate; \
                          dropping cached entry and forcing miss"
                     );
-                    let _: Result<i64, _> = conn.unlink::<_, i64>(key).await;
+                    let _: Result<i64, _> = conn.unlink::<_, i64>(&key).await;
                     Ok(None)
                 }
             }
@@ -310,18 +342,25 @@ impl CatalogCache for RedisCatalogCache {
                     cache_key = %key,
                     "catalog_cache: decode failed; forcing miss"
                 );
-                let _: Result<i64, _> = conn.unlink::<_, i64>(key).await;
+                let _: Result<i64, _> = conn.unlink::<_, i64>(&key).await;
                 Ok(None)
             }
         }
     }
 
-    async fn put(&self, key: &str, payload: &CatalogResponse, ttl: Duration) -> anyhow::Result<()> {
+    async fn put(
+        &self,
+        tenant_id: Uuid,
+        role_slug: Option<&str>,
+        team_id: Option<&str>,
+        payload: &CatalogResponse,
+    ) -> anyhow::Result<()> {
+        let key = cache_key(tenant_id, role_slug, team_id);
         let mut conn = self.conn.clone();
         let bytes = serde_json::to_vec(payload)?;
         // `set_ex` issues `SET ... EX <seconds>` — atomic write + TTL.
-        let secs: u64 = ttl.as_secs();
-        let _: () = conn.set_ex(key, bytes, secs).await?;
+        let secs: u64 = DEFAULT_TTL.as_secs();
+        let _: () = conn.set_ex(&key, bytes, secs).await?;
         Ok(())
     }
 
@@ -363,17 +402,19 @@ pub struct NoopCatalogCache {
 impl CatalogCache for NoopCatalogCache {
     async fn get(
         &self,
-        _key: &str,
-        _requesting_tenant_id: Uuid,
+        _tenant_id: Uuid,
+        _role_slug: Option<&str>,
+        _team_id: Option<&str>,
     ) -> anyhow::Result<Option<CatalogResponse>> {
         Ok(None)
     }
 
     async fn put(
         &self,
-        _key: &str,
+        _tenant_id: Uuid,
+        _role_slug: Option<&str>,
+        _team_id: Option<&str>,
         _payload: &CatalogResponse,
-        _ttl: Duration,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -530,7 +571,7 @@ mod tests {
     async fn noop_get_always_misses_and_put_is_noop() {
         let cache = NoopCatalogCache::default();
         let miss = cache
-            .get("cat:v1:any", T1)
+            .get(T1, None, None)
             .await
             .unwrap_or_else(|e| panic!("noop get must succeed: {e}"));
         assert!(miss.is_none(), "no-op cache MUST always miss on get");
@@ -541,12 +582,12 @@ mod tests {
             metrics: vec![],
         };
         cache
-            .put("cat:v1:any", &payload, DEFAULT_TTL)
+            .put(T1, None, None, &payload)
             .await
             .unwrap_or_else(|e| panic!("noop put must succeed: {e}"));
         // Still misses after put — that's the contract.
         let still_miss = cache
-            .get("cat:v1:any", T1)
+            .get(T1, None, None)
             .await
             .unwrap_or_else(|e| panic!("noop get must succeed: {e}"));
         assert!(still_miss.is_none());

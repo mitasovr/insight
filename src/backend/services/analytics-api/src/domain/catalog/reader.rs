@@ -2,14 +2,17 @@
 //!
 //! Orchestrates the read path per DESIGN §3.6:
 //!
-//! 1. Compute the canonical cache key.
-//! 2. If the tenant has the lock-bypass window armed (post-`invalidate(mode=lock)`),
-//!    skip the cache entirely.
-//! 3. Else `cache.get(key)`; on hit, return; on miss or stale-tenant-mismatch,
-//!    fall through.
-//! 4. Call the resolver (single bulk SQL + in-memory walk).
-//! 5. Populate the cache with TTL=5min (best-effort — Redis blip MUST NOT 5xx).
-//! 6. Return the serializable [`CatalogResponse`].
+//! 1. If the tenant has the lock-bypass window armed
+//!    (post-`invalidate(mode=lock)`), skip the cache entirely.
+//! 2. Else ask the cache for `(tenant_id, role_slug, team_id)`; on hit,
+//!    return; on miss or stale-tenant-mismatch, fall through.
+//! 3. Call the resolver (single bulk SQL + in-memory walk).
+//! 4. Populate the cache (best-effort — Redis blip MUST NOT 5xx).
+//! 5. Return the serializable [`CatalogResponse`].
+//!
+//! The reader never builds cache keys or picks TTLs — those are internal
+//! to the cache layer. We pass the request context (`tenant_id`, `role_slug`,
+//! `team_id`) and let the cache decide both.
 
 use std::sync::Arc;
 
@@ -17,7 +20,7 @@ use uuid::Uuid;
 
 use crate::domain::catalog::resolver::ThresholdResolver;
 use crate::domain::catalog::response::CatalogResponse;
-use crate::infra::cache::catalog_cache::{CatalogCache, DEFAULT_TTL, cache_key};
+use crate::infra::cache::catalog_cache::CatalogCache;
 
 /// Catalog reader. Cheap to clone — internally `Arc`s the cache + resolver.
 #[derive(Clone)]
@@ -50,8 +53,6 @@ impl CatalogReader {
         role_slug: Option<&str>,
         team_id: Option<&str>,
     ) -> Result<CatalogResponse, sea_orm::DbErr> {
-        let key = cache_key(tenant_id, role_slug, team_id);
-
         // Lock-event 5 s synchronous-bypass window per DESIGN §3.2: when the
         // cache was invalidated with `mode = lock`, the reader skips the
         // cache for that tenant for `2 × cross_replica_invalidation_p99` s.
@@ -64,12 +65,9 @@ impl CatalogReader {
                 "catalog_reader: lock-bypass window armed; skipping cache"
             );
         } else {
-            match self.cache.get(&key, tenant_id).await {
+            match self.cache.get(tenant_id, role_slug, team_id).await {
                 Ok(Some(hit)) => {
-                    tracing::debug!(
-                        cache_key = %key,
-                        "catalog_reader: cache hit"
-                    );
+                    tracing::debug!(tenant_id = %tenant_id, "catalog_reader: cache hit");
                     return Ok(hit);
                 }
                 Ok(None) => {} // miss — fall through to resolver
@@ -80,7 +78,7 @@ impl CatalogReader {
                     // request.
                     tracing::warn!(
                         error = %e,
-                        cache_key = %key,
+                        tenant_id = %tenant_id,
                         "catalog_reader: cache get failed; degrading to resolver"
                     );
                 }
@@ -88,8 +86,8 @@ impl CatalogReader {
         }
 
         // Resolver fallback (cache miss OR lock-bypass). Apply the same
-        // empty-string sentinel here so the bulk SQL binds match the
-        // cache-key canonicalization.
+        // empty-string sentinel the cache uses internally, so the bulk SQL
+        // binds match what a follow-up `cache.get` would have looked for.
         let role = role_slug.unwrap_or("");
         let team = team_id.unwrap_or("");
         let response = self.resolver.resolve(tenant_id, role, team).await?;
@@ -102,10 +100,15 @@ impl CatalogReader {
         // the cache during the bypass would re-cache the very payload the
         // bypass exists to suppress. The next non-bypassed read repopulates
         // naturally.
-        if !bypass && let Err(e) = self.cache.put(&key, &response, DEFAULT_TTL).await {
+        if !bypass
+            && let Err(e) = self
+                .cache
+                .put(tenant_id, role_slug, team_id, &response)
+                .await
+        {
             tracing::warn!(
                 error = %e,
-                cache_key = %key,
+                tenant_id = %tenant_id,
                 "catalog_reader: cache put failed; serving resolver result anyway"
             );
         }
@@ -123,7 +126,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
     use async_trait::async_trait;
     use chrono::Utc;
@@ -134,23 +136,39 @@ mod tests {
     const T1: Uuid = Uuid::from_u128(0x1111_1111_1111_1111_1111_1111_1111_1111_u128);
     const T2: Uuid = Uuid::from_u128(0x2222_2222_2222_2222_2222_2222_2222_2222_u128);
 
+    /// Cache-key tuple for the in-memory store. The reader passes the same
+    /// `(tenant_id, role_slug, team_id)` triple to both `get` and `put`, so a
+    /// tuple key models the contract correctly. We canonicalize `None` and
+    /// `Some("")` to the same `""` on store so the unit tests confirm the
+    /// reader doesn't accidentally pass `Some("")` to one method and `None`
+    /// to the other.
+    type Key = (Uuid, String, String);
+
+    fn key_of(tenant: Uuid, role: Option<&str>, team: Option<&str>) -> Key {
+        (
+            tenant,
+            role.unwrap_or("").to_owned(),
+            team.unwrap_or("").to_owned(),
+        )
+    }
+
     /// In-memory cache that counts get/put/invalidate calls so the reader's
     /// short-circuit + bypass behavior is observable without standing up Redis.
     #[derive(Default)]
     struct CountingCache {
-        store: Mutex<HashMap<String, CatalogResponse>>,
+        store: Mutex<HashMap<Key, CatalogResponse>>,
         skip_until: Mutex<HashMap<Uuid, std::time::Instant>>,
         get_count: AtomicUsize,
         put_count: AtomicUsize,
     }
 
     impl CountingCache {
-        fn put_now(&self, key: &str, payload: CatalogResponse) {
+        fn put_now(&self, k: Key, payload: CatalogResponse) {
             let mut g = self
                 .store
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            g.insert(key.to_owned(), payload);
+            g.insert(k, payload);
         }
 
         fn arm_skip(&self, tenant_id: Uuid) {
@@ -166,18 +184,19 @@ mod tests {
     impl CatalogCache for CountingCache {
         async fn get(
             &self,
-            key: &str,
-            requesting_tenant_id: Uuid,
+            tenant_id: Uuid,
+            role_slug: Option<&str>,
+            team_id: Option<&str>,
         ) -> anyhow::Result<Option<CatalogResponse>> {
             self.get_count.fetch_add(1, Ordering::SeqCst);
             let g = self
                 .store
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let Some(payload) = g.get(key).cloned() else {
+            let Some(payload) = g.get(&key_of(tenant_id, role_slug, team_id)).cloned() else {
                 return Ok(None);
             };
-            if payload.tenant_id != requesting_tenant_id {
+            if payload.tenant_id != tenant_id {
                 // Same cross-tenant guard the real cache implements — return
                 // a miss so the resolver repopulates with the correct tenant.
                 tracing::warn!("test counting cache: tenant mismatch hydrate");
@@ -188,24 +207,24 @@ mod tests {
 
         async fn put(
             &self,
-            key: &str,
+            tenant_id: Uuid,
+            role_slug: Option<&str>,
+            team_id: Option<&str>,
             payload: &CatalogResponse,
-            _ttl: Duration,
         ) -> anyhow::Result<()> {
             self.put_count.fetch_add(1, Ordering::SeqCst);
-            self.put_now(key, payload.clone());
+            self.put_now(key_of(tenant_id, role_slug, team_id), payload.clone());
             Ok(())
         }
 
         async fn invalidate(&self, tenant_id: Uuid, mode: InvalidateMode) -> anyhow::Result<()> {
-            // Tenant-prefix purge: remove every key whose tenant segment
-            // matches. Matches the production `SCAN cat:v1:{tenant}:* + UNLINK`.
-            let prefix = format!("cat:v1:{tenant_id}:", tenant_id = tenant_id.hyphenated());
+            // Tenant-prefix purge: remove every entry whose tenant matches.
+            // Matches the production `SCAN cat:v1:{tenant}:* + UNLINK`.
             let mut g = self
                 .store
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            g.retain(|k, _| !k.starts_with(&prefix));
+            g.retain(|(t, _, _), _| *t != tenant_id);
             drop(g);
             if mode == InvalidateMode::Lock {
                 self.arm_skip(tenant_id);
@@ -257,9 +276,7 @@ mod tests {
         // disconnected `ThresholdResolver` would error on any SQL — so a
         // green test proves the resolver wasn't reached.
         let cache = Arc::new(CountingCache::default());
-        let payload = sample_payload(T1);
-        let key = cache_key(T1, Some("eng"), Some("alpha"));
-        cache.put_now(&key, payload.clone());
+        cache.put_now(key_of(T1, Some("eng"), Some("alpha")), sample_payload(T1));
 
         let reader = CatalogReader::new(cache.clone(), placeholder_resolver());
         let out = reader.read(T1, Some("eng"), Some("alpha")).await?;
@@ -298,8 +315,7 @@ mod tests {
         // NOT served. A regression where the wrong-tenant payload IS served
         // would skip the resolver and return `Ok(_)`.
         let cache = Arc::new(CountingCache::default());
-        let key = cache_key(T1, None, None);
-        cache.put_now(&key, sample_payload(T2));
+        cache.put_now(key_of(T1, None, None), sample_payload(T2));
 
         let reached_resolver = assert_resolver_was_reached(cache.clone(), T1).await;
         assert!(
@@ -323,9 +339,7 @@ mod tests {
         // returned by a peer replica still in the broadcast window MUST be
         // skipped, not served.
         let cache = Arc::new(CountingCache::default());
-        let payload = sample_payload(T1);
-        let key = cache_key(T1, None, None);
-        cache.put_now(&key, payload);
+        cache.put_now(key_of(T1, None, None), sample_payload(T1));
         cache
             .invalidate(T1, InvalidateMode::Lock)
             .await
@@ -353,8 +367,7 @@ mod tests {
         // across the deployment — exactly the latency degradation the
         // bypass-only-on-lock contract avoids.
         let cache = Arc::new(CountingCache::default());
-        let key = cache_key(T1, None, None);
-        cache.put_now(&key, sample_payload(T1));
+        cache.put_now(key_of(T1, None, None), sample_payload(T1));
         cache
             .invalidate(T1, InvalidateMode::Standard)
             .await
@@ -363,7 +376,7 @@ mod tests {
         // Re-populate the cache after the standard invalidation (the standard
         // invalidate IS a prefix purge — the cache is now empty). We need a
         // hit to demonstrate the bypass window is NOT open.
-        cache.put_now(&key, sample_payload(T1));
+        cache.put_now(key_of(T1, None, None), sample_payload(T1));
 
         let reader = CatalogReader::new(cache.clone(), placeholder_resolver());
         let out = reader
