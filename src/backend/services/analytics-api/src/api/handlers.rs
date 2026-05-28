@@ -300,7 +300,7 @@ async fn execute_metric_query(
                 None => (None, "<"),
             },
         };
-        if (date_from.is_some() || date_to.is_some()) && from_clause.trim_start().starts_with('(') {
+        if date_from.is_some() || date_to.is_some() {
             let mut clauses: Vec<String> = vec![];
             if let Some(ref v) = date_from {
                 clauses.push(format!("metric_date >= '{}'", v.replace('\'', "''")));
@@ -313,11 +313,11 @@ async fn execute_metric_query(
                 ));
             }
             let where_inner = format!(" WHERE {}", clauses.join(" AND "));
-            (
-                inject_date_filter_into_subqueries(&from_clause, &where_inner)
-                    .unwrap_or_else(|| from_clause.clone()),
-                true,
-            )
+            let normalised = ensure_subquery_from(&from_clause);
+            match inject_date_filter_into_subqueries(&normalised, &where_inner) {
+                Some(new_from) => (new_from, true),
+                None => (from_clause.clone(), false),
+            }
         } else {
             (from_clause.clone(), false)
         }
@@ -368,6 +368,24 @@ async fn execute_metric_query(
         if let Some(drill_id) = extract_odata_value(filter, "drill_id", "eq") {
             sql.push_str(" AND drill_id = ?");
             params.push(drill_id);
+        }
+        // Per-metric scoping filters used by ic_histogram, ic_section_trend,
+        // peer_cohort_stats, and ic_kpi_peer_median catalog seeds.
+        if let Some(metric_key) = extract_odata_value(filter, "metric_key", "eq") {
+            sql.push_str(" AND metric_key = ?");
+            params.push(metric_key);
+        }
+        if let Some(section_id) = extract_odata_value(filter, "section_id", "eq") {
+            sql.push_str(" AND section_id = ?");
+            params.push(section_id);
+        }
+        if let Some(kind) = extract_odata_value(filter, "kind", "eq") {
+            sql.push_str(" AND kind = ?");
+            params.push(kind);
+        }
+        if let Some(cohort_seed) = extract_odata_value(filter, "cohort_seed", "eq") {
+            sql.push_str(" AND cohort_seed = ?");
+            params.push(cohort_seed);
         }
     }
 
@@ -496,6 +514,43 @@ fn extract_odata_value(filter: &str, field: &str, op: &str) -> Option<String> {
 ///
 /// The engine rebuilds the query with `WHERE insight_tenant_id = ?` always
 /// injected, so admins cannot bypass tenant isolation.
+fn ensure_subquery_from(from_clause: &str) -> String {
+    if from_clause.trim_start().starts_with('(') {
+        return from_clause.to_string();
+    }
+    rewrap_first_table(from_clause)
+}
+
+fn rewrap_first_table(from_clause: &str) -> String {
+    let trimmed = from_clause.trim_start();
+    let leading_ws_len = from_clause.len() - trimmed.len();
+    let leading_ws = &from_clause[..leading_ws_len];
+
+    let upper = trimmed.to_ascii_uppercase();
+    let join_pos = [
+        " LEFT JOIN ",
+        " RIGHT JOIN ",
+        " INNER JOIN ",
+        " CROSS JOIN ",
+        " JOIN ",
+    ]
+    .iter()
+    .filter_map(|kw| find_at_depth_zero(&upper, kw))
+    .min();
+
+    let (prefix, tail) = match join_pos {
+        Some(p) => (&trimmed[..p], &trimmed[p..]),
+        None => (trimmed, ""),
+    };
+
+    let tokens: Vec<&str> = prefix.split_whitespace().collect();
+    match tokens.as_slice() {
+        [t] => format!("{leading_ws}(SELECT * FROM {t}){tail}"),
+        [t, a] => format!("{leading_ws}(SELECT * FROM {t}) {a}{tail}"),
+        _ => from_clause.to_string(),
+    }
+}
+
 /// Inject `where_clause` (` WHERE ...`) into every *leafmost* `(SELECT ...)` subquery
 /// inside `from_clause`. A leaf subquery is one whose own FROM is a table (not another
 /// subquery). This guarantees the `metric_date` filter lands at the level where the raw
@@ -1363,22 +1418,27 @@ mod tests {
     }
 
     #[test]
-    fn inject_returns_none_for_bare_table_from() {
-        // Team Members shape: FROM is a bare table + JOIN, not a subquery.
-        // The walker has no place to inject WHERE; must return None so the
-        // caller's fallback knows to skip outer-WHERE injection (which would
-        // otherwise reference metric_date on a table that doesn't have it →
-        // ClickHouse UNKNOWN_IDENTIFIER 500).
+    fn inject_after_prewrap_injects_into_bare_table_first_join()
+    -> Result<(), Box<dyn std::error::Error>> {
         let from = "bronze_bamboohr.employees e \
                     LEFT JOIN insight.people p ON e.workEmail = p.email";
         let where_clause = " WHERE metric_date >= '2026-04-01'";
 
-        let result = inject_date_filter_into_subqueries(from, where_clause);
+        let normalised = ensure_subquery_from(from);
+        let output = inject_date_filter_into_subqueries(&normalised, where_clause)
+            .ok_or("pre-wrap must make injection possible for bare-table FROMs")?;
 
         assert!(
-            result.is_none(),
-            "bare-table FROM must NOT inject — fallback handler relies on this"
+            output.contains(
+                "(SELECT * FROM bronze_bamboohr.employees WHERE metric_date >= '2026-04-01') e"
+            ),
+            "WHERE must land inside the wrapped first table; got:\n{output}"
         );
+        assert!(
+            output.contains("LEFT JOIN insight.people p ON e.workEmail = p.email"),
+            "JOIN tail must be preserved verbatim; got:\n{output}"
+        );
+        Ok(())
     }
 
     #[test]
@@ -1427,6 +1487,173 @@ mod tests {
         assert!(
             output.contains("FROM insight.task_delivery_bullet_rows WHERE metric_date"),
             "WHERE must be appended right after the source table; got:\n{output}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_subquery_from_passthrough_when_already_subquery() {
+        let from = "(SELECT * FROM insight.ic_kpis) GROUP BY person_id";
+        assert_eq!(ensure_subquery_from(from), from);
+    }
+
+    #[test]
+    fn ensure_subquery_from_passthrough_when_leading_whitespace_then_paren() {
+        let from = "  (SELECT * FROM insight.ic_kpis)";
+        assert_eq!(ensure_subquery_from(from), from);
+    }
+
+    #[test]
+    fn ensure_subquery_from_wraps_bare_single_table() {
+        let from = "insight.ic_kpis";
+        assert_eq!(ensure_subquery_from(from), "(SELECT * FROM insight.ic_kpis)");
+    }
+
+    #[test]
+    fn ensure_subquery_from_wraps_bare_table_with_alias() {
+        let from = "insight.ic_kpis k";
+        assert_eq!(
+            ensure_subquery_from(from),
+            "(SELECT * FROM insight.ic_kpis) k"
+        );
+    }
+
+    #[test]
+    fn ensure_subquery_from_wraps_first_of_join_preserving_alias_and_tail() {
+        let from = "insight.team_member m \
+                    LEFT JOIN insight.people p ON m.person_id = p.person_id";
+        let out = ensure_subquery_from(from);
+        assert_eq!(
+            out,
+            "(SELECT * FROM insight.team_member) m \
+             LEFT JOIN insight.people p ON m.person_id = p.person_id"
+        );
+    }
+
+    #[test]
+    fn ensure_subquery_from_wraps_first_of_join_with_inner_subquery_tail() {
+        let from = "insight.team_member m \
+                    LEFT JOIN insight.people p ON m.person_id = p.person_id \
+                    LEFT JOIN (SELECT lower(workEmail) AS person_id, \
+                                      lower(argMax(supervisorEmail, _airbyte_extracted_at)) AS supervisor_email \
+                               FROM bronze_bamboohr.employees \
+                               WHERE workEmail IS NOT NULL \
+                               GROUP BY lower(workEmail)) s ON s.person_id = m.person_id";
+        let out = ensure_subquery_from(from);
+        assert!(
+            out.starts_with("(SELECT * FROM insight.team_member) m LEFT JOIN insight.people p"),
+            "first table must be wrapped, alias preserved, JOIN tail kept; got:\n{out}"
+        );
+        assert!(
+            out.contains("LEFT JOIN (SELECT lower(workEmail)"),
+            "later subquery JOIN must be untouched; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn ensure_subquery_from_picks_earliest_join_keyword() {
+        let from =
+            "insight.a a INNER JOIN insight.b b ON a.x = b.x LEFT JOIN insight.c c ON a.x = c.x";
+        let out = ensure_subquery_from(from);
+        assert!(
+            out.starts_with("(SELECT * FROM insight.a) a INNER JOIN insight.b"),
+            "first JOIN keyword (INNER JOIN) marks end of first-table prefix; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn ensure_subquery_from_handles_lowercase_join() {
+        let from = "insight.team_member m left join insight.people p on m.person_id = p.person_id";
+        let out = ensure_subquery_from(from);
+        assert!(
+            out.starts_with("(SELECT * FROM insight.team_member) m left join insight.people p"),
+            "JOIN match must be case-insensitive; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn full_pipeline_injects_metric_date_into_bare_single_table()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let from = ensure_subquery_from("insight.ic_kpis");
+        let where_clause = " WHERE metric_date >= '2026-04-01' AND metric_date < '2026-05-01'";
+        let out = inject_date_filter_into_subqueries(&from, where_clause)
+            .ok_or("pre-wrap + walker must yield injected SQL for bare single table")?;
+        assert_eq!(
+            out,
+            "(SELECT * FROM insight.ic_kpis WHERE metric_date >= '2026-04-01' AND metric_date < '2026-05-01')"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_pipeline_injects_metric_date_into_first_of_join_only()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let from = ensure_subquery_from(
+            "insight.team_member m LEFT JOIN insight.people p ON m.person_id = p.person_id",
+        );
+        let where_clause = " WHERE metric_date >= '2026-04-01'";
+        let out = inject_date_filter_into_subqueries(&from, where_clause)
+            .ok_or("pre-wrap + walker must yield injected SQL for bare-table FROM with JOIN")?;
+        let where_count = out.matches("WHERE metric_date >= '2026-04-01'").count();
+        assert_eq!(
+            where_count, 1,
+            "filter must land exactly once (in the wrapped first table); got count={where_count}; full:\n{out}"
+        );
+        assert!(
+            out.contains("(SELECT * FROM insight.team_member WHERE metric_date >= '2026-04-01') m"),
+            "filter must be inside the wrapper, before the closing paren; got:\n{out}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_pipeline_injects_into_bare_inner_from_below_multiif_expression()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let from = ensure_subquery_from(
+            "(SELECT supervisor_email AS cohort_seed, person_id, kpi_key, \
+                     multiIf(kpi_key IN ('bugs_fixed','tasks_closed','prs_merged','ai_sessions'), \
+                             sum(value), avg(value)) AS person_total \
+              FROM insight.ic_kpi_peer_median \
+              GROUP BY supervisor_email, person_id, kpi_key)",
+        );
+        let where_clause = " WHERE metric_date >= '2026-04-01'";
+        let out = inject_date_filter_into_subqueries(&from, where_clause)
+            .ok_or("walker must leaf-inject into bare-FROM inside outer subquery despite nested multiIf parens in the SELECT list")?;
+        let count = out.matches("WHERE metric_date >= '2026-04-01'").count();
+        assert_eq!(
+            count, 1,
+            "filter must land once at the leaf FROM, not inside multiIf(...); got count={count}; full:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "FROM insight.ic_kpi_peer_median WHERE metric_date >= '2026-04-01' GROUP BY supervisor_email"
+            ),
+            "WHERE must land between bare table and its GROUP BY; got:\n{out}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_pipeline_bullet_two_level_still_injects_into_both_leaves()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let from = ensure_subquery_from(
+            "(SELECT metric_key, person_id, sum(metric_value) AS v \
+             FROM insight.task_delivery_bullet_rows \
+             GROUP BY metric_key, person_id) p \
+            LEFT JOIN (SELECT metric_key, median(v) AS m \
+                       FROM (SELECT metric_key, person_id, sum(metric_value) AS v \
+                             FROM insight.task_delivery_bullet_rows \
+                             GROUP BY metric_key, person_id) inner_c \
+                       GROUP BY metric_key) c \
+            ON c.metric_key = p.metric_key",
+        );
+        let where_clause = " WHERE metric_date >= '2026-04-01'";
+        let out = inject_date_filter_into_subqueries(&from, where_clause)
+            .ok_or("walker must inject into both leaves of bullet shape")?;
+        let count = out.matches("WHERE metric_date >= '2026-04-01'").count();
+        assert_eq!(
+            count, 2,
+            "bullet two-level shape must still inject into both p and inner_c; got count={count}; full:\n{out}"
         );
         Ok(())
     }
