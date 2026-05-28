@@ -4,25 +4,47 @@
 //! §3.6 (`cpt-metric-cat-seq-catalog-read`). Carries the read-latency hit-path
 //! NFR and the cross-replica invalidation NFR.
 //!
-//! ## Cache key
+//! ## Storage shape: one Redis hash per tenant
 //!
-//! Canonical key: `cat:v1:{tenant_id}:{role_slug_or_empty}:{team_id_or_empty}`,
-//! with every segment URL-safe-encoded. `tenant_id` is rendered as the
-//! lowercase hyphenated UUID (deterministic regardless of input casing).
-//! `role_slug` / `team_id` use the **empty-string sentinel** when absent — the
-//! sentinel is identical to the DB UNIQUE-composite convention (#519) and
-//! eliminates the "two callers in different tenants generate the same key"
-//! collision class. The encoder percent-encodes any byte outside
-//! `[A-Za-z0-9_\-]`; a hostile or accidental `role_slug = "a:b"` becomes
-//! `a%3Ab` and cannot bleed into the tenant or team segments.
+//! Each tenant's cache lives in a single Redis hash:
+//!
+//! - **Hash key**: `cat:v1:{tenant_id}` (lowercase hyphenated UUID).
+//! - **Field name**: `{role_slug_or_empty}:{team_id_or_empty}`, every segment
+//!   URL-safe-encoded (percent-encode any byte outside `[A-Za-z0-9_-]`). The
+//!   empty-string sentinel for absent role/team matches the DB UNIQUE-composite
+//!   convention from #519. A hostile `role_slug = "a:b"` becomes `a%3Ab` and
+//!   cannot bleed into the team segment.
+//! - **Field value**: JSON-encoded [`CatalogResponse`].
+//! - **TTL**: per-hash (whole tenant), refreshed on every write via `EXPIRE`.
+//!   Per-field TTL would need `HEXPIRE` (Redis 7.4+); per-hash is simpler,
+//!   matches the "admin write invalidates the tenant atomically" mental model,
+//!   and lets a hot tenant keep its cache warm indefinitely while a quiet one
+//!   expires cleanly.
+//!
+//! Trade-off versus a key-per-entry layout (`cat:v1:{tenant}:{role}:{team}`)
+//! + `SCAN cat:v1:{tenant}:* + UNLINK`:
+//!
+//! - **Tenant invalidation is now O(1)** — a single `UNLINK cat:v1:{tenant}`
+//!   instead of an iterator-cursor loop over per-entry keys, and atomic
+//!   (no race window for concurrent writes to land between `SCAN` cursor calls).
+//! - **Better memory packing** — Redis encodes small hashes as `listpack`s
+//!   below `hash-max-listpack-entries` (default 128). A tenant with ≤ 128
+//!   distinct `(role, team)` combinations pays one allocation, not one per
+//!   entry.
+//! - `flush_all()` still uses `SCAN cat:v1:* + UNLINK`, but now enumerates
+//!   tenant hashes (a small number) rather than per-entry keys (potentially
+//!   thousands).
+//!
+//! DESIGN §3.2's swap-ability OQ (§4 γ) explicitly allows changing the cache
+//! mechanism behind the trait — the public surface
+//! (`get`/`put`/`invalidate`/`flush_all`) is unchanged.
 //!
 //! ## Invalidation contract
 //!
-//! - [`InvalidateMode::Standard`] — tenant-prefix purge
-//!   (`SCAN cat:v1:{tenant}:* + UNLINK`). NEVER `FLUSHDB` (the Redis instance
-//!   is shared with `person_aliases:*` from Identity Resolution; FLUSHDB would
-//!   clobber sibling namespaces).
-//! - [`InvalidateMode::Lock`] — same prefix purge, **plus** opens a 5 s
+//! - [`InvalidateMode::Standard`] — `UNLINK cat:v1:{tenant}`. NEVER `FLUSHDB`
+//!   (the Redis instance is shared with `person_aliases:*` from Identity
+//!   Resolution; FLUSHDB would clobber sibling namespaces).
+//! - [`InvalidateMode::Lock`] — same hash UNLINK, **plus** opens a 5 s
 //!   synchronous-resolver-bypass window for that tenant. Sized at
 //!   `2 × cpt-metric-cat-nfr-cross-replica-invalidation`-p99 (= 2 × 2 s).
 //!   While the window is open, [`CatalogCache::should_skip`] returns `true`
@@ -159,19 +181,26 @@ pub trait CatalogCache: Send + Sync {
     fn should_skip(&self, tenant_id: Uuid) -> bool;
 }
 
-/// Build the canonical cache key — internal to this module. `None` and
-/// `Some("")` map to the same key (canonical empty-string sentinel — see
-/// module docs).
+/// Build the per-tenant Redis hash key — internal to this module. Always
+/// `cat:v1:{tenant_id}` with the UUID rendered as 36 lowercase hyphenated
+/// chars (deterministic regardless of how the caller spelled the UUID).
 #[must_use]
-fn cache_key(tenant_id: Uuid, role_slug: Option<&str>, team_id: Option<&str>) -> String {
-    let role = url_safe_encode(role_slug.unwrap_or(""));
-    let team = url_safe_encode(team_id.unwrap_or(""));
-    // `Uuid::hyphenated` is always 36 lowercase chars — deterministic regardless
-    // of how the caller spelled the UUID upstream.
+fn tenant_hash_key(tenant_id: Uuid) -> String {
     format!(
-        "{CACHE_KEY_PREFIX}{tenant_id}:{role}:{team}",
+        "{CACHE_KEY_PREFIX}{tenant_id}",
         tenant_id = tenant_id.hyphenated()
     )
+}
+
+/// Build the field name inside a tenant's hash. `None` and `Some("")` map
+/// to the same field (canonical empty-string sentinel — see module docs).
+/// Both segments are URL-safe-encoded so a hostile `role_slug = "a:b"`
+/// cannot bleed into the team segment.
+#[must_use]
+fn cache_field(role_slug: Option<&str>, team_id: Option<&str>) -> String {
+    let role = url_safe_encode(role_slug.unwrap_or(""));
+    let team = url_safe_encode(team_id.unwrap_or(""));
+    format!("{role}:{team}")
 }
 
 /// Percent-encode bytes outside the URL-safe whitelist `[A-Za-z0-9_\-]`.
@@ -268,13 +297,14 @@ impl RedisCatalogCache {
         })
     }
 
-    /// `SCAN MATCH pattern + UNLINK` — never `KEYS`, never `FLUSHDB`.
-    /// `UNLINK` is preferred over `DEL` because it is asynchronous on the
-    /// server side and won't block large invalidations.
+    /// `SCAN MATCH pattern + UNLINK` — used only by `flush_all`, which has
+    /// to enumerate tenant hashes. NEVER `KEYS`, NEVER `FLUSHDB`. `UNLINK`
+    /// is preferred over `DEL` because it is asynchronous on the server
+    /// side and won't block large purges.
+    ///
+    /// Per-tenant invalidation does NOT use this — it's a single
+    /// `UNLINK cat:v1:{tenant}` against the hash key (see `invalidate`).
     async fn scan_and_unlink(&self, pattern: &str) -> anyhow::Result<()> {
-        // Take a fresh handle to the connection manager so the `&mut` borrow
-        // doesn't escape this method. ConnectionManager is `Clone` and
-        // multiplexes across underlying connections.
         let mut conn = self.conn.clone();
         let mut cursor: u64 = 0;
         loop {
@@ -309,9 +339,11 @@ impl CatalogCache for RedisCatalogCache {
         role_slug: Option<&str>,
         team_id: Option<&str>,
     ) -> anyhow::Result<Option<CatalogResponse>> {
-        let key = cache_key(tenant_id, role_slug, team_id);
+        let hash_key = tenant_hash_key(tenant_id);
+        let field = cache_field(role_slug, team_id);
         let mut conn = self.conn.clone();
-        let raw: Option<Vec<u8>> = conn.get(&key).await?;
+        // `HGET` returns the field value as bytes (or nil → None).
+        let raw: Option<Vec<u8>> = conn.hget(&hash_key, &field).await?;
         let Some(raw) = raw else {
             return Ok(None);
         };
@@ -320,29 +352,33 @@ impl CatalogCache for RedisCatalogCache {
                 if payload.tenant_id == tenant_id {
                     Ok(Some(payload))
                 } else {
-                    // Defense in depth — the key already encodes tenant; a
-                    // mismatch on the embedded `tenant_id` means either a
+                    // Defense in depth — the hash key already encodes tenant;
+                    // a mismatch on the embedded `tenant_id` means either a
                     // backend misconfig or an attacker-controlled collision.
-                    // Drop the entry, log, and serve a miss so the resolver
-                    // repopulates authoritative state.
+                    // Drop the field, log, and serve a miss so the resolver
+                    // repopulates authoritative state. `HDEL` is field-scoped
+                    // — sibling fields (other (role, team) combinations for
+                    // this tenant) are untouched.
                     tracing::warn!(
-                        cache_key = %key,
+                        hash_key = %hash_key,
+                        field = %field,
                         embedded_tenant = %payload.tenant_id,
                         requesting_tenant = %tenant_id,
                         "catalog_cache: tenant_id mismatch on hydrate; \
-                         dropping cached entry and forcing miss"
+                         dropping cached field and forcing miss"
                     );
-                    let _: Result<i64, _> = conn.unlink::<_, i64>(&key).await;
+                    let _: Result<i64, _> = conn.hdel::<_, _, i64>(&hash_key, &field).await;
                     Ok(None)
                 }
             }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    cache_key = %key,
+                    hash_key = %hash_key,
+                    field = %field,
                     "catalog_cache: decode failed; forcing miss"
                 );
-                let _: Result<i64, _> = conn.unlink::<_, i64>(&key).await;
+                let _: Result<i64, _> = conn.hdel::<_, _, i64>(&hash_key, &field).await;
                 Ok(None)
             }
         }
@@ -355,18 +391,32 @@ impl CatalogCache for RedisCatalogCache {
         team_id: Option<&str>,
         payload: &CatalogResponse,
     ) -> anyhow::Result<()> {
-        let key = cache_key(tenant_id, role_slug, team_id);
+        let hash_key = tenant_hash_key(tenant_id);
+        let field = cache_field(role_slug, team_id);
         let mut conn = self.conn.clone();
         let bytes = serde_json::to_vec(payload)?;
-        // `set_ex` issues `SET ... EX <seconds>` — atomic write + TTL.
+        // `HSET` has no TTL of its own. Refresh the per-hash TTL with
+        // `EXPIRE` after every write so an actively-read tenant keeps its
+        // cache warm; a quiet tenant lets its hash expire cleanly. Both
+        // operations ship in a single pipelined round-trip.
         let secs: u64 = DEFAULT_TTL.as_secs();
-        let _: () = conn.set_ex(&key, bytes, secs).await?;
+        let _: ((), bool) = redis::pipe()
+            .atomic()
+            .hset(&hash_key, &field, bytes)
+            .expire(&hash_key, i64::try_from(secs).unwrap_or(i64::MAX))
+            .query_async(&mut conn)
+            .await?;
         Ok(())
     }
 
     async fn invalidate(&self, tenant_id: Uuid, mode: InvalidateMode) -> anyhow::Result<()> {
-        let pattern = format!("{CACHE_KEY_PREFIX}{}:*", tenant_id.hyphenated());
-        self.scan_and_unlink(&pattern).await?;
+        // O(1) tenant-wide purge: drop the whole hash in one command.
+        // `UNLINK` (async-server-side delete) avoids blocking on a large
+        // hash. No `SCAN` cursor needed — the entire tenant's cache lives
+        // under one key.
+        let hash_key = tenant_hash_key(tenant_id);
+        let mut conn = self.conn.clone();
+        let _: i64 = conn.unlink(&hash_key).await?;
         if mode == InvalidateMode::Lock {
             self.skip_until
                 .arm(tenant_id, Instant::now() + LOCK_BYPASS_WINDOW);
@@ -450,61 +500,69 @@ mod tests {
     const T1: Uuid = Uuid::from_u128(0x1111_1111_1111_1111_1111_1111_1111_1111_u128);
     const T2: Uuid = Uuid::from_u128(0x2222_2222_2222_2222_2222_2222_2222_2222_u128);
 
-    // ── Cache key shape ─────────────────────────────────────────────────
+    // ── Tenant hash key + field shape ──────────────────────────────────
 
     #[test]
     fn prefix_is_cat_v1_colon() {
-        // Cross-component pin: seed flush, admin invalidate, and the resolver
-        // all derive their keys from this constant. A typo silently desyncs.
+        // Cross-component pin: tenant hash keys, admin invalidate, and
+        // `flush_all` all derive from this constant. A typo silently desyncs.
         assert_eq!(CACHE_KEY_PREFIX, "cat:v1:");
     }
 
     #[test]
-    fn key_includes_tenant_role_team_in_canonical_order() {
-        let key = cache_key(T1, Some("eng"), Some("alpha"));
-        assert_eq!(key, "cat:v1:11111111-1111-1111-1111-111111111111:eng:alpha");
+    fn tenant_hash_key_is_prefix_plus_hyphenated_uuid() {
+        // The hash key carries only the tenant — every (role, team)
+        // combination lives as a field inside that hash. Renders the UUID
+        // lowercase hyphenated, deterministic regardless of input casing.
+        assert_eq!(
+            tenant_hash_key(T1),
+            "cat:v1:11111111-1111-1111-1111-111111111111"
+        );
     }
 
     #[test]
-    fn none_role_and_empty_role_produce_same_key() {
+    fn cache_field_includes_role_and_team_in_canonical_order() {
+        // The field is `{role}:{team}` with both segments URL-safe-encoded.
+        // No tenant component here — the tenant is the hash key, not the
+        // field.
+        assert_eq!(cache_field(Some("eng"), Some("alpha")), "eng:alpha");
+    }
+
+    #[test]
+    fn none_and_empty_produce_same_field() {
         // Determinism gate per DESIGN §3.2: the empty-string sentinel for
-        // `role_slug` / `team_id` is the SAME key regardless of whether the
-        // caller passed `None` or `Some("")`. A regression here is a
-        // silent cache miss on every request whose other side spells it the
-        // other way.
-        let none_key = cache_key(T1, None, None);
-        let empty_key = cache_key(T1, Some(""), Some(""));
-        assert_eq!(none_key, empty_key);
-        assert_eq!(none_key, "cat:v1:11111111-1111-1111-1111-111111111111::");
+        // `role_slug` / `team_id` produces the SAME field regardless of
+        // whether the caller passed `None` or `Some("")`. A regression
+        // here is a silent cache miss on every request whose other side
+        // spells it the other way.
+        let none_field = cache_field(None, None);
+        let empty_field = cache_field(Some(""), Some(""));
+        assert_eq!(none_field, empty_field);
+        assert_eq!(none_field, ":");
     }
 
     #[test]
     fn none_role_only_collapses_to_empty_segment() {
-        let key = cache_key(T1, None, Some("alpha"));
-        assert_eq!(key, "cat:v1:11111111-1111-1111-1111-111111111111::alpha");
+        assert_eq!(cache_field(None, Some("alpha")), ":alpha");
     }
 
     #[test]
     fn role_with_colon_is_percent_encoded_cannot_collide_with_team() {
         // Hostile / accidental `role_slug = "a:b"` MUST percent-encode to
         // `a%3Ab` so it cannot bleed into the team-segment position. Without
-        // encoding, `role = "a"` + `team = "b"` would produce the SAME key
+        // encoding, `role = "a"` + `team = "b"` would produce the SAME field
         // as `role = "a:b"` + `team = ""` — a cross-context collision.
-        let a_b_team = cache_key(T1, Some("a"), Some("b"));
-        let role_colon = cache_key(T1, Some("a:b"), Some(""));
+        let a_b_team = cache_field(Some("a"), Some("b"));
+        let role_colon = cache_field(Some("a:b"), Some(""));
         assert_ne!(a_b_team, role_colon, "colon in role MUST encode");
-        assert_eq!(
-            role_colon,
-            "cat:v1:11111111-1111-1111-1111-111111111111:a%3Ab:"
-        );
+        assert_eq!(role_colon, "a%3Ab:");
     }
 
     #[test]
     fn role_with_percent_is_percent_encoded() {
         // `%` itself is not in the whitelist — must encode to `%25` to avoid
         // ambiguity with an already-encoded segment.
-        let key = cache_key(T1, Some("100%"), Some(""));
-        assert_eq!(key, "cat:v1:11111111-1111-1111-1111-111111111111:100%25:");
+        assert_eq!(cache_field(Some("100%"), Some("")), "100%25:");
     }
 
     #[test]
@@ -512,10 +570,9 @@ mod tests {
         // The whitelist `[A-Za-z0-9_\-]` must round-trip cleanly so the
         // common case (alphanumeric role/team identifiers) doesn't pay
         // encoding overhead in the hot path.
-        let key = cache_key(T1, Some("eng_lead-1"), Some("Team_42"));
         assert_eq!(
-            key,
-            "cat:v1:11111111-1111-1111-1111-111111111111:eng_lead-1:Team_42"
+            cache_field(Some("eng_lead-1"), Some("Team_42")),
+            "eng_lead-1:Team_42"
         );
     }
 
