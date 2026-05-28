@@ -329,12 +329,17 @@ const _: () = assert!(DEFAULT_DEBOUNCE.as_secs() == 60);
 async fn read_updated_at(
     db: &DatabaseConnection,
     id: uuid::Uuid,
-) -> anyhow::Result<chrono::NaiveDateTime> {
+) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
     use sea_orm::FromQueryResult;
 
+    // `metric_catalog.updated_at` is `TIMESTAMP` (set by SeaORM's
+    // `Expr::current_timestamp()` in the migration). sea-orm 1.1.20's
+    // decoder refuses to map `TIMESTAMP` into `NaiveDateTime` — it
+    // only accepts `DATETIME` there. `DateTime<Utc>` IS the documented
+    // round-trip for the `TIMESTAMP` SQL type, so we use it here.
     #[derive(FromQueryResult)]
     struct Row {
-        updated_at: chrono::NaiveDateTime,
+        updated_at: chrono::DateTime<chrono::Utc>,
     }
 
     let row = Row::find_by_statement(Statement::from_sql_and_values(
