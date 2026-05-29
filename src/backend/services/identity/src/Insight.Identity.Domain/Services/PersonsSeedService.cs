@@ -54,7 +54,7 @@ public sealed class PersonsSeedService
 
         // ── Phase 3: apply (one transaction) ───────────────────────────
         var rows = BuildObservationRows(resolved.Assignments, tenantId, authorPersonId);
-        var applied = await _store.ApplyAsync(tenantId, rows, cancellationToken).ConfigureAwait(false);
+        var applied = await _store.ApplyAsync(tenantId, authorPersonId, rows, cancellationToken).ConfigureAwait(false);
 
         return new PersonsSeedSummary(
             AccountsRead:          accountsRead,
@@ -64,7 +64,7 @@ public sealed class PersonsSeedService
             AccountsSkippedClosed: resolved.SkippedClosed,
             AccountsSkippedNoEmail: resolved.SkippedNoEmail,
             ObservationsInserted:  applied.ObservationsInserted,
-            OrgChartEdgesRebuilt:  applied.OrgChartEdgesRebuilt);
+            OrgChartRowsRebuilt:  applied.OrgChartRowsRebuilt);
     }
 
     private async Task<IReadOnlyList<SeedProfile>> BuildProfilesAsync(

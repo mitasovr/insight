@@ -135,11 +135,14 @@ public sealed class PersonsSeedServiceTests
         public Task<IReadOnlyDictionary<string, Guid>> GetLatestEmailToPersonAsync(Guid tenantId, CancellationToken ct)
             => Task.FromResult<IReadOnlyDictionary<string, Guid>>(EmailToPerson);
 
-        public Task<SeedApplyResult> ApplyAsync(Guid tenantId, IReadOnlyList<PersonObservationRow> rows, CancellationToken ct)
+        public Guid? AuthorPassedToApply { get; private set; }
+
+        public Task<SeedApplyResult> ApplyAsync(Guid tenantId, Guid authorPersonId, IReadOnlyList<PersonObservationRow> rows, CancellationToken ct)
         {
             Applied = true;
+            AuthorPassedToApply = authorPersonId;
             Inserted.AddRange(rows);
-            return Task.FromResult(new SeedApplyResult(rows.Count, OrgChartEdgesRebuilt: 0));
+            return Task.FromResult(new SeedApplyResult(rows.Count, OrgChartRowsRebuilt: 0));
         }
     }
 }

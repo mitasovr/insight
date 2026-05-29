@@ -40,3 +40,14 @@ public sealed record SubchartNodeResponse(
 /// with sibling fields (e.g. depth-cap echoes, pagination hints).
 /// </summary>
 public sealed record SubchartResponse(SubchartNodeResponse Root);
+
+/// <summary>
+/// Forest response for <c>GET /v1/subchart?depth=N</c> (no person id) —
+/// #344 follow-up. Returns the trees the caller can see; the array is
+/// empty when the caller has no visible-in-source members. Orphans
+/// (root with no children anywhere in the source's <c>org_chart</c>)
+/// are filtered out at the SQL layer (an <c>EXISTS</c> in the roots
+/// CTE), so <c>depth=0</c> still returns legit tops with empty
+/// <c>subordinates</c> instead of every root being dropped.
+/// </summary>
+public sealed record SubchartForestResponse(IReadOnlyList<SubchartNodeResponse> Roots);

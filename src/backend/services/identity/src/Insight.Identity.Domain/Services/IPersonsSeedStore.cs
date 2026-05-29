@@ -40,6 +40,7 @@ public interface IPersonsSeedStore
     /// </summary>
     Task<SeedApplyResult> ApplyAsync(
         Guid tenantId,
+        Guid authorPersonId,
         IReadOnlyList<PersonObservationRow> rows,
         CancellationToken cancellationToken);
 }
@@ -50,4 +51,4 @@ public interface IPersonsSeedStore
 /// INSERT IGNORE actually wrote); duplicates suppressed by the unique
 /// key are not counted, so a pure re-seed reports 0.
 /// </summary>
-public sealed record SeedApplyResult(int ObservationsInserted, int OrgChartEdgesRebuilt);
+public sealed record SeedApplyResult(int ObservationsInserted, int OrgChartRowsRebuilt);
