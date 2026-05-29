@@ -26,6 +26,14 @@
 #   DNS_UPSTREAMS — space-separated upstreams (default: "8.8.8.8 8.8.4.4")
 set -euo pipefail
 
+# Auto-skip on non-WSL hosts. WSL exposes itself via /proc/version containing
+# "microsoft" (case-insensitive) and/or $WSL_DISTRO_NAME. macOS has no
+# /proc/version. Native Linux has /proc/version without "microsoft".
+if [[ -z "${WSL_DISTRO_NAME:-}" ]] \
+  && ! grep -qi microsoft /proc/version 2>/dev/null; then
+  exit 0
+fi
+
 if [[ "${SKIP_COREDNS_PATCH:-0}" == "1" ]]; then
   exit 0
 fi

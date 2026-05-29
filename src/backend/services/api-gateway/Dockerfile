@@ -4,7 +4,7 @@
 # Usage: cd src/backend && docker build -f services/api-gateway/Dockerfile -t insight-api-gateway:dev .
 
 # Stage 1: Builder
-FROM rust:1.92-bookworm AS builder
+FROM rust:1.95-bookworm AS builder
 
 # Install protobuf-compiler (required by grpc-hub → prost-build)
 RUN apt-get update && \
