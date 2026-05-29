@@ -1,0 +1,53 @@
+name: Silver Contract Parity
+
+# Offline cross-connector silver-contract consistency gate.
+#
+# Verifies that every connector feeding a `silver:<class>` tag declares exactly
+# the columns/types its silver class contract declares (catches "column added to
+# one connector, forgotten in another" before merge). Reads the dbt manifest
+# produced by `dbt parse` — NO warehouse needed, runs in seconds.
+#
+# Complements the E2E suite (.github/workflows/e2e-bronze-to-api.yml), which
+# enforces the dbt contracts themselves via `dbt build` against a real
+# ClickHouse. This job is the cheap fast guard; e2e is the full-stack check.
+#
+# Script: src/ingestion/scripts/check_silver_contract_parity.py
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/ingestion/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/ingestion/**"
+  workflow_dispatch:
+
+jobs:
+  parity:
+    name: Silver contract parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dbt-clickhouse
+        run: pip install "dbt-clickhouse>=1.9"
+
+      - name: dbt parse (offline, no warehouse)
+        working-directory: src/ingestion/dbt
+        env:
+          # profiles.yml renders env_var('CLICKHOUSE_PASSWORD'); `dbt parse`
+          # never opens a connection, so any non-empty value lets it render.
+          CLICKHOUSE_PASSWORD: parse-only
+        run: dbt parse --profiles-dir .
+
+      - name: Check silver contract parity
+        run: |
+          python src/ingestion/scripts/check_silver_contract_parity.py \
+            --manifest src/ingestion/dbt/target/manifest.json

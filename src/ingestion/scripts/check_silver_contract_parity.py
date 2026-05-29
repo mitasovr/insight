@@ -13,21 +13,23 @@ without a warehouse:
     column-count mismatch). PR CI stays green because it never materialises
     every connector at once.
 
-This gate enforces a single source of truth per class: the silver class model's
-own contract. Every connector tagged `silver:<class>` MUST emit exactly the
-columns the silver model `<class>` declares (name + data_type). That guarantees,
-transitively, that connectors agree with each other AND that the silver layer
-(hence the facts/metrics reading it) gets exactly what it expects.
+Opt-in by design. A silver class is checked ONLY when its silver model declares
+`contract: enforced: true`. That contract is the single source of truth: every
+connector tagged `silver:<class>` MUST emit exactly the columns (name +
+data_type) the silver model declares, and must itself carry an enforced contract
+(so its declared columns are verified against its SQL by `dbt build` — this gate
+only compares declarations, and trusts that dbt keeps them honest).
 
     silver contract: class_git_commits   (what consumers expect)
         == github__commits
         == bitbucket_cloud__commits
         == github_v2__commits             (the moment it ships)
 
+Classes whose silver model has no enforced contract are SKIPPED (reported, not
+failed), so contracts can be rolled out one class at a time.
+
 Convention: the silver class model for tag `silver:<class>` is the model named
 `<class>` (e.g. tag `silver:class_git_commits` -> model `class_git_commits`).
-If that silver model has no contract yet, the gate falls back to comparing
-connectors against each other and warns that the silver contract is missing.
 
 Source of truth is the dbt manifest (`dbt parse` -> target/manifest.json), which
 is fully offline.
@@ -37,7 +39,7 @@ Usage:
     python scripts/check_silver_contract_parity.py \
         --manifest src/ingestion/dbt/target/manifest.json
 
-Exit code 0 = all silver classes consistent. 1 = drift found (CI fails).
+Exit code 0 = all enforced silver classes consistent. 1 = drift found (CI fails).
 """
 
 from __future__ import annotations
@@ -61,48 +63,47 @@ def load_manifest(path: Path) -> dict:
         return json.load(fh)
 
 
-def _columns(node: dict) -> dict[str, str]:
-    return {
-        name: (col.get("data_type") or "<no data_type>")
-        for name, col in node.get("columns", {}).items()
-    }
-
-
 def index_manifest(manifest: dict):
-    """Return (connectors_by_tag, columns_by_model_name).
+    """Return (connectors_by_tag, model_index).
 
-    connectors_by_tag: tag -> {model_name -> {column -> data_type}} for models
-        carrying a `silver:*` tag (the per-connector staging models).
-    columns_by_model_name: every model name -> {column -> data_type}; used to
-        resolve the silver class model that anchors each tag.
+    connectors_by_tag: tag -> [model_name, ...] for models carrying a
+        `silver:*` tag (the per-connector staging models).
+    model_index: model_name -> {"columns": {col: data_type}, "enforced": bool}
+        for every model; used to resolve the silver class model per tag.
     """
-    connectors_by_tag: dict[str, dict[str, dict[str, str]]] = defaultdict(dict)
-    columns_by_model_name: dict[str, dict[str, str]] = {}
+    connectors_by_tag: dict[str, list[str]] = defaultdict(list)
+    model_index: dict[str, dict] = {}
     for node in manifest.get("nodes", {}).values():
         if node.get("resource_type") != "model":
             continue
         name = node["name"]
-        cols = _columns(node)
-        columns_by_model_name[name] = cols
+        model_index[name] = {
+            "columns": {
+                col_name: (col.get("data_type") or "<no data_type>")
+                for col_name, col in node.get("columns", {}).items()
+            },
+            "enforced": bool(node.get("contract", {}).get("enforced", False)),
+        }
         for tag in node.get("tags", []):
             if tag.startswith(SILVER_TAG_PREFIX):
-                connectors_by_tag[tag][name] = cols
-    return connectors_by_tag, columns_by_model_name
+                connectors_by_tag[tag].append(name)
+    return connectors_by_tag, model_index
 
 
-def compare_to_reference(
-    reference: dict[str, str], models: dict[str, dict[str, str]]
-) -> list[str]:
-    """Compare every connector model against a reference column set."""
+def check_class(reference: dict[str, str], connectors: dict[str, dict]) -> list[str]:
+    """Compare every connector model against the silver contract column set."""
     problems: list[str] = []
     ref_cols = set(reference)
-    for model in sorted(models):
-        cols = models[model]
-        if not cols:
+    for model in sorted(connectors):
+        info = connectors[model]
+        if not info["enforced"]:
             problems.append(
-                f"{model}: no typed contract (add `contract: enforced: true` "
-                f"+ typed columns to its schema.yml)"
+                f"{model}: contract not enforced — its declared columns are "
+                f"unverified against its SQL (add `contract: enforced: true`)"
             )
+        cols = info["columns"]
+        if not cols:
+            problems.append(f"{model}: no typed columns declared in schema.yml")
             continue
         missing = sorted(ref_cols - set(cols))
         extra = sorted(set(cols) - ref_cols)
@@ -118,28 +119,6 @@ def compare_to_reference(
     return problems
 
 
-def compare_pairwise(models: dict[str, dict[str, str]]) -> list[str]:
-    """Fallback when the silver class has no contract: connectors vs each other."""
-    problems: list[str] = []
-    contracted = {m: c for m, c in models.items() if c}
-    uncontracted = sorted(m for m, c in models.items() if not c)
-    if uncontracted:
-        problems.append("models without a typed contract: " + ", ".join(uncontracted))
-    if len(contracted) < 2:
-        return problems
-    all_columns: set[str] = set().union(*(set(c) for c in contracted.values()))
-    for model in sorted(contracted):
-        missing = sorted(all_columns - set(contracted[model]))
-        if missing:
-            problems.append(f"{model}: MISSING columns {missing}")
-    for column in sorted(all_columns):
-        types = {m: c[column] for m, c in contracted.items() if column in c}
-        if len(set(types.values())) > 1:
-            rendered = ", ".join(f"{m}={t}" for m, t in sorted(types.items()))
-            problems.append(f"column `{column}` has conflicting types: {rendered}")
-    return problems
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -150,49 +129,49 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    connectors_by_tag, columns_by_model_name = index_manifest(load_manifest(args.manifest))
+    connectors_by_tag, model_index = index_manifest(load_manifest(args.manifest))
     if not connectors_by_tag:
         print("No `silver:*`-tagged models found — nothing to check.")
         return 0
 
     failed = False
+    checked = skipped = 0
     for tag in sorted(connectors_by_tag):
-        connectors = connectors_by_tag[tag]
         silver_model = tag[len(SILVER_TAG_PREFIX):]  # e.g. "class_git_commits"
-        silver_cols = columns_by_model_name.get(silver_model)
-        label = f"{tag}  ({len(connectors)} connector(s): {', '.join(sorted(connectors))})"
+        anchor = model_index.get(silver_model)
+        connector_names = sorted(connectors_by_tag[tag])
+        label = f"{tag}  ({len(connector_names)} connector(s): {', '.join(connector_names)})"
 
-        if silver_cols:
-            problems = compare_to_reference(silver_cols, connectors)
-            mode = f"vs silver contract `{silver_model}`"
-        else:
-            problems = compare_pairwise(connectors)
-            mode = "connector-vs-connector (FALLBACK)"
-            problems.insert(
-                0,
-                f"silver model `{silver_model}` has no contract — add "
-                f"`contract: enforced: true` to make it the source of truth",
-            )
+        # Opt-in: only enforce classes whose silver model has an enforced contract.
+        if anchor is None or not anchor["enforced"]:
+            skipped += 1
+            reason = "no silver model found" if anchor is None else "silver contract not enforced"
+            print(f"· {tag}  [skipped — {reason}]")
+            continue
 
+        checked += 1
+        connectors = {n: model_index[n] for n in connector_names}
+        problems = check_class(anchor["columns"], connectors)
         if problems:
             failed = True
-            print(f"\n✗ {label}  [{mode}]")
+            print(f"\n✗ {label}  [vs silver contract `{silver_model}`]")
             for p in problems:
                 print(f"    - {p}")
         else:
-            print(f"✓ {label}  [{mode}]")
+            print(f"✓ {label}  [vs silver contract `{silver_model}`]")
 
+    print(f"\nChecked {checked} enforced class(es); skipped {skipped} without an enforced contract.")
     if failed:
         print(
-            "\nContract drift detected. Every connector feeding a silver class "
-            "must emit exactly the columns/types the silver contract declares.\n"
-            "Fix: align the `columns:` blocks in each connector's schema.yml to "
-            "the silver class contract.",
+            "Contract drift detected. Every connector feeding an enforced silver "
+            "class must emit exactly the columns/types the silver contract "
+            "declares.\nFix: align the `columns:` blocks in each connector's "
+            "schema.yml to the silver class contract.",
             file=sys.stderr,
         )
         return 1
 
-    print("\nAll silver classes are connector-consistent.")
+    print("All enforced silver classes are connector-consistent.")
     return 0
 
 

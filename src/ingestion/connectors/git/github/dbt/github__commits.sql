@@ -2,6 +2,7 @@
     materialized='incremental',
     unique_key='unique_key',
     order_by=['unique_key'],
+    on_schema_change='append_new_columns',
     settings={'allow_nullable_key': 1},
     schema='staging',
     tags=['github', 'silver:class_git_commits']
