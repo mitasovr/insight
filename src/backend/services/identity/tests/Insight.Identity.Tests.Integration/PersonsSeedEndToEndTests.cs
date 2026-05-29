@@ -77,7 +77,7 @@ public sealed class PersonsSeedEndToEndTests : IAsyncLifetime
         var noParent = await CountAsync("SELECT COUNT(*) FROM org_chart WHERE insight_tenant_id=@t AND valid_to IS NULL AND parent_person_id IS NULL");
         noParent.Should().Be(1);
         // Summary counts all rebuilt rows (edges + no-parent rows).
-        summary.OrgChartEdgesRebuilt.Should().Be(2);
+        summary.OrgChartRowsRebuilt.Should().Be(2);
     }
 
     [Fact]

@@ -77,7 +77,9 @@ public sealed record PersonObservationRow(
 /// <see cref="ObservationsInserted"/> is NET-NEW only — rows the
 /// INSERT IGNORE actually wrote; duplicates already present are not
 /// counted, so a pure re-seed reports 0 even though every account was
-/// processed.
+/// processed. <see cref="OrgChartRowsRebuilt"/> counts every row
+/// written into <c>org_chart</c> — both parent→child edges and the
+/// no-parent rows added by path B for tops and singletons.
 /// </summary>
 public sealed record PersonsSeedSummary(
     int AccountsRead,
@@ -87,4 +89,4 @@ public sealed record PersonsSeedSummary(
     int AccountsSkippedClosed,
     int AccountsSkippedNoEmail,
     int ObservationsInserted,
-    int OrgChartEdgesRebuilt);
+    int OrgChartRowsRebuilt);

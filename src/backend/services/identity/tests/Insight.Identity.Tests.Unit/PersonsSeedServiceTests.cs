@@ -142,7 +142,7 @@ public sealed class PersonsSeedServiceTests
             Applied = true;
             AuthorPassedToApply = authorPersonId;
             Inserted.AddRange(rows);
-            return Task.FromResult(new SeedApplyResult(rows.Count, OrgChartEdgesRebuilt: 0));
+            return Task.FromResult(new SeedApplyResult(rows.Count, OrgChartRowsRebuilt: 0));
         }
     }
 }

@@ -11,20 +11,6 @@ namespace Insight.Identity.Infrastructure.MariaDb;
 internal static class SqlSubchart
 {
     /// <summary>
-    /// Parameters:
-    /// <list type="bullet">
-    ///   <item><c>@tenant_id</c> — BINARY(16) big-endian.</item>
-    ///   <item><c>@root_person_id</c> — BINARY(16) big-endian.</item>
-    ///   <item><c>@source_type</c> — string (e.g. <c>bamboohr</c>).</item>
-    ///   <item><c>@max_depth</c> — int or NULL. NULL = unbounded
-    ///   (constrained by MariaDB's <c>cte_max_recursion_depth</c>).</item>
-    /// </list>
-    /// Result columns: <c>person_id</c>, <c>parent_person_id</c>
-    /// (NULL on root), <c>depth</c>, <c>email</c>, <c>display_name</c>,
-    /// <c>job_title</c>, <c>status</c> (each text field may be NULL when
-    /// no observation of that type exists).
-    /// </summary>
-    /// <summary>
     /// Forest variant (#344 follow-up). Same shape as
     /// <see cref="GetSubchart"/> but seeded from EVERY visible root in
     /// the caller's <c>visible_set</c> instead of a single
@@ -109,7 +95,10 @@ internal static class SqlSubchart
               AND oc.insight_source_type = @source_type
               AND oc.valid_to IS NULL
             WHERE (oc.parent_person_id IS NULL
-                OR oc.parent_person_id NOT IN (SELECT person_id FROM in_source))
+                OR NOT EXISTS (
+                    SELECT 1 FROM in_source i2
+                    WHERE i2.person_id = oc.parent_person_id
+                ))
               AND EXISTS (
                   SELECT 1 FROM org_chart c2
                   WHERE c2.parent_person_id    = i.person_id
@@ -161,6 +150,20 @@ internal static class SqlSubchart
         ORDER BY s.depth, s.person_id
         """;
 
+    /// <summary>
+    /// Parameters:
+    /// <list type="bullet">
+    ///   <item><c>@tenant_id</c> — BINARY(16) big-endian.</item>
+    ///   <item><c>@root_person_id</c> — BINARY(16) big-endian.</item>
+    ///   <item><c>@source_type</c> — string (e.g. <c>bamboohr</c>).</item>
+    ///   <item><c>@max_depth</c> — int or NULL. NULL = unbounded
+    ///   (constrained by MariaDB's <c>cte_max_recursion_depth</c>).</item>
+    /// </list>
+    /// Result columns: <c>person_id</c>, <c>parent_person_id</c>
+    /// (NULL on root), <c>depth</c>, <c>email</c>, <c>display_name</c>,
+    /// <c>job_title</c>, <c>status</c> (each text field may be NULL when
+    /// no observation of that type exists).
+    /// </summary>
     public const string GetSubchart = """
         WITH RECURSIVE
         subtree (person_id, parent_person_id, depth) AS (

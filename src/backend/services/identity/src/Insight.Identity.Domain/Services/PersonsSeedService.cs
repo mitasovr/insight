@@ -64,7 +64,7 @@ public sealed class PersonsSeedService
             AccountsSkippedClosed: resolved.SkippedClosed,
             AccountsSkippedNoEmail: resolved.SkippedNoEmail,
             ObservationsInserted:  applied.ObservationsInserted,
-            OrgChartEdgesRebuilt:  applied.OrgChartEdgesRebuilt);
+            OrgChartRowsRebuilt:  applied.OrgChartRowsRebuilt);
     }
 
     private async Task<IReadOnlyList<SeedProfile>> BuildProfilesAsync(
