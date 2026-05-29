@@ -1088,7 +1088,7 @@ const INSERT_CATALOG_SQL: &str = "\
     INSERT INTO metric_catalog \
         (id, tenant_id, metric_key, label, sublabel, description, unit, format, \
          higher_is_better, is_member_scale, source_tags, is_enabled) \
-    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), TRUE) \
+    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE) \
     ON DUPLICATE KEY UPDATE \
         label = VALUES(label), \
         sublabel = VALUES(sublabel), \
