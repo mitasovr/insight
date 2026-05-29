@@ -20,11 +20,11 @@ models:
   - name: github__repository_branches
     description: "GitHub branches -> staging, feeds class_git_repository_branches"
 
-  # CONTRACT: this column list must stay identical (name + data_type) across
-  # every connector tagged `silver:class_git_commits` (github, bitbucket-cloud,
-  # github-v2, ...). Cross-connector parity is enforced by
-  # scripts/check_silver_contract_parity.py in CI — you cannot add a column to
-  # one connector without adding it to all of them.
+  # CONTRACT: must match the `class_git_commits` silver contract exactly
+  # (name + data_type) — that silver model is the source of truth for this
+  # class. Enforced by scripts/check_silver_contract_parity.py in CI, so you
+  # cannot add/change a column here without updating the silver contract (and
+  # therefore every other connector feeding this class).
   - name: github__commits
     description: "GitHub commits -> staging, feeds class_git_commits"
     config:
