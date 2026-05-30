@@ -570,17 +570,26 @@ ab_list_connections() {
 }
 
 # ---------------------------------------------------------------------------
-# ab_discover_schema <source_id>
+# ab_discover_schema <source_id> [disable_cache]
 # POST /api/v1/sources/discover_schema — returns the discovered catalog as
 # JSON. Used by reconcile to bootstrap a connection's syncCatalog when one
 # does not exist yet. The returned object has a `catalog` key with the
 # raw streams; callers normalize it (append-only) before passing to
 # ab_create_connection.
+#
+# `disable_cache` (default "false"): Airbyte caches the discovered catalog
+# keyed by SOURCE CONFIG, not by connector image tag. On an image-only bump
+# (e.g. a new connector build that adds properties to a stream's schema) the
+# source config is unchanged, so a cached discover returns the OLD schema and
+# the new fields never reach the connection's sync_catalog. Callers that run
+# after a definition/image change (reconcile's republish + refresh paths)
+# MUST pass "true" to force a fresh discover. See ADR-0016.
 # ---------------------------------------------------------------------------
 ab_discover_schema() {
   local source_id="$1"
+  local disable_cache="${2:-false}"
   local body
-  body=$(printf '{"sourceId":"%s","disable_cache":false}' "${source_id}")
+  body=$(printf '{"sourceId":"%s","disable_cache":%s}' "${source_id}" "${disable_cache}")
   ab__curl POST /api/v1/sources/discover_schema "${body}"
 }
 

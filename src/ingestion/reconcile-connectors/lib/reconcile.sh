@@ -588,7 +588,9 @@ reconcile_connections() {
       return 1
     fi
     local discover_json sync_catalog
-    if ! discover_json="$(ab_discover_schema "${source_id}")"; then
+    # disable_cache=true: bootstrap discover for a source whose definition may
+    # have just been (re)created at a new image. Avoid a stale cached catalog.
+    if ! discover_json="$(ab_discover_schema "${source_id}" true)"; then
       reconcile__log ERROR "${connector_name}" \
         "ab_discover_schema failed for source ${source_id}"
       return 1
@@ -694,7 +696,11 @@ reconcile_refresh_catalog() {
     return 0
   fi
   local discover_json sync_catalog
-  if ! discover_json="$(ab_discover_schema "${source_id}")"; then
+  # disable_cache=true: this refresh runs on republish (definition/image
+  # changed). Airbyte's discover cache is keyed by source config — unchanged
+  # on an image-only bump — so a cached discover would return the OLD schema
+  # and new fields would never reach the sync_catalog. Force a fresh discover.
+  if ! discover_json="$(ab_discover_schema "${source_id}" true)"; then
     reconcile__log ERROR "${connector_name}" \
       "ab_discover_schema failed during catalog refresh for source ${source_id}"
     return 1
