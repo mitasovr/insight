@@ -95,6 +95,14 @@ UNION ALL
 -- do not expose these fields. query_ref aggregates via sumIf — a 0
 -- contribution from non-Team rows is harmless.
 --
+-- ⚠️  prs_total / prs_with_cc scope: both columns are populated ONLY from
+-- claude_team (source = 'claude_team') which feeds into tool = 'claude_code'
+-- rows here. claude_enterprise also writes tool = 'claude_code' rows but
+-- contributes prs_total_count = NULL → 0 (no GitHub-app). This means the
+-- prs_total metric reflects only Claude Team PR attribution, NOT all
+-- claude_code activity. The name is intentionally scoped to the GitHub-app
+-- population, not the broader "all Claude Code users" population.
+--
 -- cc_offered: denominator query_ref uses to reconstruct cc_tool_acceptance
 -- as 100 * Σcc_tool_accept / Σcc_offered.
 SELECT

@@ -26,7 +26,12 @@
 //! dispatch — average per-person value over the requested period —
 //! identical to `cc_sessions`, `cc_lines`, etc.
 //!
-//! Total FE-visible `metric_key`s: 16 → 19.
+//! Backend-computed `metric_key`s after this migration: 16 → 19.
+//! ⚠️  FE-visible status: the three new keys are **not yet rendered** by
+//! the frontend — `BULLET_DEFS` / `IC_KPI_DEFS` in `cyber-insight-front`
+//! need corresponding entries (tracked as a follow-up to INSIGHT-458).
+//! Catalog metadata (label / unit / thresholds) is seeded by the paired
+//! migration `m20260601_000002_seed_claude_team_metrics_catalog`.
 
 use sea_orm_migration::prelude::*;
 
