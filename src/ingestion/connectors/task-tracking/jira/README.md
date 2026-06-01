@@ -33,7 +33,6 @@ stringData:
   jira_api_token: "CHANGE_ME"
   jira_project_keys: "PROJ1,PROJ2"
   # jira_start_date: "2024-01-01"   # optional, default = 2020-01-01
-  # jira_page_size: "50"             # optional, default = 50, max 100
 ```
 
 ### Fields
@@ -45,7 +44,6 @@ stringData:
 | `jira_api_token` | Yes | Atlassian API token. Marked `airbyte_secret: true` — never logged |
 | `jira_project_keys` | Yes | Comma-separated project keys (e.g. `TC,TNG`). Jira Cloud rejects unbounded JQL queries |
 | `jira_start_date` | No | Earliest date to sync issues from, `YYYY-MM-DD`. Default `2020-01-01` |
-| `jira_page_size` | No | JQL page size, 1..100. Default `50` |
 
 ### Automatically injected
 

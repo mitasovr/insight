@@ -763,7 +763,7 @@ streams:
           field_name: nextPageToken
         pagination_strategy:
           type: CursorPagination
-          page_size: 50
+          page_size: 100
           cursor_value: "{{ response.get('nextPageToken', '') }}"
           stop_condition: "{{ not response.get('nextPageToken') }}"
       requester:
@@ -7943,14 +7943,6 @@ spec:
         title: Start Date
         default: "2020-01-01"
         order: 6
-      jira_page_size:
-        type: integer
-        description: Page size for JQL search (default 50, max 100)
-        title: Page Size
-        default: 50
-        minimum: 1
-        maximum: 100
-        order: 7
       jira_story_points_field_id:
         type: string
         description: >-
