@@ -27,10 +27,14 @@ use crate::infra::db::{check_probe, product_default_probe};
 const ENV_VAR: &str = "INTEGRATION_TESTS_MARIADB_URL";
 const TEST_METRIC_KEY: &str = "analytics_metrics.tasks_closed";
 
-/// Expected catalog row count produced by `m20260527_000001_seed_metric_catalog`.
-/// Pinned here so the live DB test catches drift between the seed SEEDS array
-/// and the rendered state without re-importing the const.
-const EXPECTED_SEED_ROW_COUNT: i64 = 69;
+/// Expected catalog row count produced by every product-default catalog
+/// seed migration combined. Pinned here so the live DB test catches drift
+/// between the seed `SEEDS` arrays and the rendered state without
+/// re-importing the consts. Breakdown:
+/// - `m20260527_000001_seed_metric_catalog`               → 69 rows
+/// - `m20260601_000002_seed_claude_team_metrics_catalog`  →  3 rows
+/// - `m20260603_000001_seed_crm_metric_catalog`           →  8 rows
+const EXPECTED_SEED_ROW_COUNT: i64 = 80;
 
 async fn connect_or_skip() -> Option<DatabaseConnection> {
     let Ok(url) = std::env::var(ENV_VAR) else {
@@ -70,17 +74,24 @@ async fn drop_catalog_tables(db: &DatabaseConnection) -> Result<(), sea_orm::DbE
     // the actual schema).
     //
     // Covers the schema migrations (`m20260522_*`: catalog / threshold /
-    // audit), the seed migration (`m20260527_*`: Refs #523), and the
-    // junction-table migration (`m20260529_*`: ADR-001
-    // `metric_query_catalog`). Any future catalog-domain migration must
-    // extend this OR pattern — otherwise a partial replay leaves catalog
-    // tables empty (schema reapplied, seed skipped) and downstream
-    // invariants break in confusing ways.
+    // audit), the seed migrations (`m20260527_*` Refs #523, the Claude
+    // Team catalog seed `m20260601_000002`, the CRM catalog seed +
+    // link `m20260603_*`), and the junction-table migration
+    // (`m20260529_*`: ADR-001 `metric_query_catalog`). Any future
+    // catalog-domain migration must extend this OR pattern — otherwise
+    // a partial replay leaves catalog tables empty (schema reapplied,
+    // seed skipped) and downstream invariants break in confusing ways.
+    //
+    // `m20260601_000001` is intentionally NOT listed — it modifies
+    // `analytics.metrics.query_ref` rather than catalog tables, and
+    // catalog-tables cleanup doesn't undo that side-effect.
     db.execute_unprepared(
         "DELETE FROM seaql_migrations \
          WHERE version LIKE 'm20260522_%' \
             OR version LIKE 'm20260527_%' \
-            OR version LIKE 'm20260529_%'",
+            OR version LIKE 'm20260529_%' \
+            OR version = 'm20260601_000002_seed_claude_team_metrics_catalog' \
+            OR version LIKE 'm20260603_%'",
     )
     .await?;
     Ok(())
