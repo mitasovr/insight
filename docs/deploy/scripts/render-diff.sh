@@ -10,7 +10,7 @@
 #   $1  ENV
 #   $2  NAMESPACE
 #   $3  RELEASE
-#   $4  CHART (OCI ref, e.g. oci://ghcr.io/cyberfabric/charts/insight)
+#   $4  CHART (OCI ref, e.g. oci://ghcr.io/constructorfabric/charts/insight)
 #   $5  VALUES file
 #   $6  RENDER_DIR (typically .deploy)
 #   $7  INSIGHT_VERSION (umbrella semver from .insight-version)

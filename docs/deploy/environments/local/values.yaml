@@ -77,7 +77,7 @@ ingestion:
 # Pin `image.tag` to a concrete tag published to GHCR by the upstream
 # CI. The published tag format is `YYYY.MM.DD.HH.MM-<short-sha>`; pick
 # the latest one from the chart appVersion in
-# https://github.com/cyberfabric/cyber-insight (or whichever umbrella
+# https://github.com/constructorfabric/insight (or whichever umbrella
 # you're tracking) and update on bumps.
 #
 # The example tags below are illustrative — replace them with whatever
@@ -116,7 +116,7 @@ analyticsApi:
 identity:
   deploy: true
   image:
-    repository: ghcr.io/cyberfabric/insight-identity
+    repository: ghcr.io/constructorfabric/insight-identity
     tag: "REPLACE_WITH_LATEST_BACKEND_TAG"
   databaseName: "identity"
   # Optional. When set (must be a valid GUID), identity-resolution
@@ -134,7 +134,7 @@ frontend:
   # The frontend image is built from a separate repo (insight-front)
   # with its own publish-chart workflow; its tag is decoupled from the
   # backend services above. Pin the latest tag from
-  # https://github.com/orgs/cyberfabric/packages?q=cyber-insight-front
+  # https://github.com/orgs/constructorfabric/packages?q=insight-front
   # (or whichever upstream you're tracking).
   image:
     tag: "REPLACE_WITH_LATEST_FRONTEND_TAG"

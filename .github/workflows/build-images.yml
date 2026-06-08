@@ -19,7 +19,7 @@ on:
       - ".github/workflows/scripts/discover-image-matrix.py"
   workflow_dispatch:
     inputs:
-      # Cross-repo dispatch hook: cyberfabric/cyber-insight-front's CI sends
+      # Cross-repo dispatch hook: constructorfabric/insight-front's CI sends
       # the just-published frontend image tag here so the umbrella chart
       # bumps the frontend subchart appVersion to match. When set, ALL
       # backend image-build jobs are skipped (the dispatch carries no
@@ -40,7 +40,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/cyberfabric
+  IMAGE_PREFIX: ghcr.io/constructorfabric
 
 permissions:
   contents: write   # publish-chart auto-commits Chart.yaml bumps back to main
@@ -498,7 +498,7 @@ jobs:
           BUILD_TAG: ${{ needs.changes.outputs.build_tag }}
         run: |
           set -euo pipefail
-          git config user.email "ci@cyberfabric.local"
+          git config user.email "ci@constructorfabric.local"
           git config user.name  "insight-ci"
 
           # Stage every descriptor.yaml that was patched. `sort -u` because
@@ -544,7 +544,7 @@ jobs:
   # ─── Umbrella chart publish ────────────────────────────────────────────────
   # Per merge to main: bump subchart appVersions for whichever services were
   # rebuilt in this run, patch-bump the umbrella version, regenerate
-  # Chart.lock, package, push to oci://ghcr.io/cyberfabric/charts/insight,
+  # Chart.lock, package, push to oci://ghcr.io/constructorfabric/charts/insight,
   # and commit the bumps back to main with [skip ci] so we don't recurse.
   #
   # Skipped in this run when bump-descriptors committed (`committed=true`):
@@ -639,7 +639,7 @@ jobs:
           fi
 
       # Cross-repo frontend bump. The frontend lives in
-      # cyberfabric/cyber-insight-front and builds its own image; on
+      # constructorfabric/insight-front and builds its own image; on
       # publish-to-main its CI dispatches THIS workflow with frontend_tag
       # set to the just-built tag. We mirror that into the frontend
       # subchart's appVersion so the deploy path resolves the right image.
@@ -717,7 +717,7 @@ jobs:
       - name: Helm push
         run: |
           helm push "dist/insight-${{ steps.umbrella.outputs.version }}.tgz" \
-            oci://ghcr.io/cyberfabric/charts
+            oci://ghcr.io/constructorfabric/charts
 
       - name: Commit version bumps back to main
         env:
@@ -725,7 +725,7 @@ jobs:
           BUILD_TAG: ${{ needs.changes.outputs.build_tag }}
         run: |
           set -euo pipefail
-          git config user.email "ci@cyberfabric.local"
+          git config user.email "ci@constructorfabric.local"
           git config user.name  "insight-ci"
 
           git add charts/insight/Chart.yaml \

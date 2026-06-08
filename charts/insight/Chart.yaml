@@ -25,12 +25,12 @@ type: application
 version: 0.1.47
 appVersion: "2026.06.04.19.35-89ba5bf"
 kubeVersion: ">=1.27.0-0"
-home: https://github.com/cyberfabric/insight
+home: https://github.com/constructorfabric/insight
 sources:
-  - https://github.com/cyberfabric/insight
+  - https://github.com/constructorfabric/insight
 maintainers:
-  - name: Cyberfabric
-    url: https://github.com/cyberfabric
+  - name: Constructorfabric
+    url: https://github.com/constructorfabric
 # Dependencies — the heart of the umbrella.
 #
 # Fields:

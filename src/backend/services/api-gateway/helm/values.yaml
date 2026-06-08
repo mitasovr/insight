@@ -3,7 +3,7 @@ replicaCount: 1
 podAnnotations: {}
 
 image:
-  repository: ghcr.io/cyberfabric/insight-api-gateway
+  repository: ghcr.io/constructorfabric/insight-api-gateway
   tag: ""                # MUST be set by the operator. No `:latest` default.
   pullPolicy: IfNotPresent
 
@@ -70,7 +70,7 @@ proxy:
   routes: []
 
 # Health probes
-# Provided by cyberfabric api-gateway module:
+# Provided by gears-rust api-gateway module:
 #   GET /health  → {"status":"healthy","timestamp":"..."} (public, no auth)
 #   GET /healthz → "ok" (public, no auth)
 # No separate /ready endpoint — gateway is stateless, healthy = ready.

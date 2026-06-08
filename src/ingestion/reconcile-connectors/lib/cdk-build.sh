@@ -15,7 +15,7 @@
 # Image reference:
 #   The full Docker image reference is read verbatim from
 #   descriptor.images.cdk.image per ADR-0016
-#   (e.g. `ghcr.io/cyberfabric/source-foo-insight:v1.2.3` for push, or
+#   (e.g. `ghcr.io/constructorfabric/source-foo-insight:v1.2.3` for push, or
 #   `source-foo-insight:dev` for local-only). No registry derivation.
 #
 # Function naming: cdk_*

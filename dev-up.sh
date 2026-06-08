@@ -261,7 +261,7 @@ build_and_load_image() {
 # would otherwise crash with `FE_REPO: unbound variable` after the
 # toolbox/jira-enrich builds succeed but before the values file is
 # generated.
-FE_REPO="${FE_IMAGE_REPOSITORY:-ghcr.io/cyberfabric/insight-front}"
+FE_REPO="${FE_IMAGE_REPOSITORY:-ghcr.io/constructorfabric/insight-front}"
 FE_TAG="${FE_IMAGE_TAG:-$(image_tag_for frontend)}"
 FE_IMAGE="${FE_REPO}:${FE_TAG}"
 

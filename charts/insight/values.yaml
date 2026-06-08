@@ -162,7 +162,7 @@ ingestion:
   # `serviceaccount "argo-workflow" not found`.
   templates:
     enabled: true
-  toolboxImage: "ghcr.io/cyberfabric/insight-toolbox:2026.06.04.19.35-89ba5bf" # e.g. "ghcr.io/cyberfabric/insight-toolbox:2026.04.28.10.34-b08b460"
+  toolboxImage: "ghcr.io/constructorfabric/insight-toolbox:2026.06.04.19.35-89ba5bf" # e.g. "ghcr.io/constructorfabric/insight-toolbox:2026.04.28.10.34-b08b460"
   # airbyte-sync poll-job tunables — see templates/ingestion/airbyte-sync.yaml.
   # The poll loop replaces a wall-clock deadline with a progress watchdog:
   # it tracks (status, bytesEmitted, recordsEmitted, stateMessagesEmitted)
@@ -380,7 +380,7 @@ redpanda:
 apiGateway:
   replicaCount: 2
   image:
-    repository: ghcr.io/cyberfabric/insight-api-gateway
+    repository: ghcr.io/constructorfabric/insight-api-gateway
     tag: "" # MUST be set (e.g. "0.1.0")
     pullPolicy: IfNotPresent
   resources:
@@ -426,7 +426,7 @@ apiGateway:
 analyticsApi:
   replicaCount: 2
   image:
-    repository: ghcr.io/cyberfabric/insight-analytics-api
+    repository: ghcr.io/constructorfabric/insight-analytics-api
     tag: "" # MUST be set (e.g. "0.1.0")
     pullPolicy: IfNotPresent
   resources:
@@ -451,7 +451,7 @@ identity:
   deploy: false
   replicaCount: 1
   image:
-    repository: ghcr.io/cyberfabric/insight-identity
+    repository: ghcr.io/constructorfabric/insight-identity
     tag: "" # MUST be set (e.g. "0.1.0")
     pullPolicy: IfNotPresent
   resources:
@@ -491,7 +491,7 @@ identity:
 frontend:
   replicaCount: 1
   image:
-    repository: ghcr.io/cyberfabric/cyber-insight-front
+    repository: ghcr.io/constructorfabric/insight-front
     tag: "" # MUST be set (e.g. "0.1.0")
     pullPolicy: IfNotPresent
   resources:
