@@ -3,8 +3,8 @@ name = "jira-enrich"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-authors = ["Cyber Fabric"]
-repository = "https://github.com/cyberfabric/insight"
+authors = ["Constructor Fabric"]
+repository = "https://github.com/constructorfabric/insight"
 rust-version = "1.80"
 description = "Jira Silver enrich — materializes silver.task_tracker_field_history from bronze_jira."
 

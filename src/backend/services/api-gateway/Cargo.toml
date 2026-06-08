@@ -16,7 +16,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-# cyberfabric core
+# gears-rust
 modkit = { workspace = true, features = ["bootstrap"] }
 
 # System modules (linked via inventory for runtime discovery)

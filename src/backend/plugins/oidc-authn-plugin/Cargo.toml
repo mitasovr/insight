@@ -1,7 +1,7 @@
 [package]
 name = "oidc-authn-plugin"
 version = "0.1.0"
-description = "OIDC/JWT authentication plugin for cyberfabric authn-resolver"
+description = "OIDC/JWT authentication plugin for gears-rust authn-resolver"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -12,7 +12,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-# cyberfabric
+# gears-rust
 modkit = { workspace = true }
 modkit-auth = { workspace = true }
 modkit-http = { workspace = true }
