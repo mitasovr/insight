@@ -104,7 +104,7 @@ jobs:
   # `images.<key>.image` in descriptor.yaml on every successful push without
   # `[skip ci]`, and that push re-triggers this workflow. If the descriptor
   # itself fired image rebuilds, we'd loop forever.
-  #
+  # 
   # `workflow_dispatch` with empty `frontend_tag` (legacy full-rebuild) emits
   # every entry; PR runs use the same path-filter logic as push runs.
   discover-images:
