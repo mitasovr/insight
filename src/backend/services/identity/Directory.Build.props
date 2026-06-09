@@ -1,6 +1,6 @@
 <Project>
   <!-- CI rebuild marker — bumped to retrigger the identity image build on
-       the constructorfabric/* namespace flip (2026-06-09). -->
+       the constructorfabric/* namespace flip (2026-06-09 11:32). -->
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <LangVersion>latest</LangVersion>
