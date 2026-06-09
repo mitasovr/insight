@@ -31,7 +31,7 @@ This folder is the canonical home for the YouTrack connector's specification art
 
 ## Current implementation status
 
-The connector ships **Bronze-only** in PR [#227](https://github.com/cyberfabric/cyber-insight/pull/227): a Builder-UI-compatible declarative manifest with ten streams writing into `bronze_youtrack.*` ClickHouse tables. Verified against a live tenant: 76 492 records / 0 errors across all ten streams.
+The connector ships **Bronze-only** in PR [#227](https://github.com/constructorfabric/insight/pull/227): a Builder-UI-compatible declarative manifest with ten streams writing into `bronze_youtrack.*` ClickHouse tables. Verified against a live tenant: 76 492 records / 0 errors across all ten streams.
 
 ### Implemented (PR #227)
 

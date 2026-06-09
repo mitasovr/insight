@@ -5,7 +5,7 @@
 
 ## Overview
 
-When a developer pushes a change inside a connector directory that ships a Dockerfile (CDK source, enrich sidecar, future bootstrap or migrator containers), CI runs a deterministic **two-commit publication flow** that ends with a new umbrella chart published to `oci://ghcr.io/cyberfabric/charts/insight`. The gitops poller picks up the new chart version on its scheduled tick.
+When a developer pushes a change inside a connector directory that ships a Dockerfile (CDK source, enrich sidecar, future bootstrap or migrator containers), CI runs a deterministic **two-commit publication flow** that ends with a new umbrella chart published to `oci://ghcr.io/constructorfabric/charts/insight`. The gitops poller picks up the new chart version on its scheduled tick.
 
 The flow uses **dynamic discovery** — `.github/workflows/build-images.yml` scans every `descriptor.yaml.images:` block (per ADR-0016) on every run, builds the matrix of `(connector, image-key, name, dockerfile, context)`, filters by which entries' `context` matched a changed path, and fans out a build per entry. There is no per-connector job in the workflow YAML. Adding a new connector with images is a descriptor edit and (if the directory layout differs) a paths-trigger entry — never a per-image job copypaste.
 
@@ -38,7 +38,7 @@ build-images.yml
   └── publish-chart
        ├── values.yaml: ingestion.toolboxImage = ghcr.io/.../insight-toolbox:NEW_TAG
        ├── Chart.yaml: umbrella version patch-bumped
-       ├── helm package + helm push → oci://ghcr.io/cyberfabric/charts/insight:NEW
+       ├── helm package + helm push → oci://ghcr.io/constructorfabric/charts/insight:NEW
        └── commit B — chore(release): umbrella X.Y.Z+1 (build TAG) [skip ci]
   │
   ▼
@@ -113,7 +113,7 @@ No build identity lives in the workflow YAML. Renaming a GHCR image, moving a Do
 - If you suspect a loop in progress, manually abort the running workflow from the GitHub Actions UI, then fix the filter.
 
 ### "Dev cluster not picking up new chart"
-- Check `oci://ghcr.io/cyberfabric/charts/insight` listing — confirm the new semver is published.
+- Check `oci://ghcr.io/constructorfabric/charts/insight` listing — confirm the new semver is published.
 - Check insight-gitops GitLab CI: most recent `chart-poller` run should have committed an update to `.insight-version`. If it didn't, look at the job log for skopeo/auth errors.
 - Manual recovery: in insight-gitops, run the `chart-poller` job from the Pipelines UI ("Run pipeline" → manual trigger).
 

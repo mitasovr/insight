@@ -56,7 +56,7 @@ Chosen option: **Option B — Pre-built images, descriptor carries the full imag
 > Examples:
 > ```yaml
 > type: cdk
-> cdk_image: "ghcr.io/cyberfabric/source-bitbucket-cloud-insight:2026.04.21.16.10-b36cf42"
+> cdk_image: "ghcr.io/constructorfabric/source-bitbucket-cloud-insight:2026.04.21.16.10-b36cf42"
 > ```
 > ```yaml
 > type: cdk

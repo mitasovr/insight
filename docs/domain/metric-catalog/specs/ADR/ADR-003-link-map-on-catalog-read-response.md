@@ -15,7 +15,7 @@ date: 2026-06-01
 
 ADR-001 added the `metric_query_catalog` junction table to make the `metrics(id)` ↔ `metric_catalog(id)` M:N relationship queryable from the schema. It solved the structural answer to "given a query, which catalog rows does it emit." It did NOT decide how that answer reaches consumers on the wire.
 
-Consumers — primarily cyber-insight-front per cyberfabric/cyber-insight-front#66 — need that answer for a hot path:
+Consumers — primarily insight-front per constructorfabric/insight-front#66 — need that answer for a hot path:
 
 1. The FE issues batched value requests against a `metrics.query_ref` (one HTTP call per bullet section), then renders each emitted value into the catalog row it belongs to.
 2. To render, the FE has to know which catalog rows a given query emits. That's the M:N answer.
@@ -50,7 +50,7 @@ Cache integration: `links` is cached as part of the `CatalogResponse` payload �
 
 ### Consequences
 
-- Good, because the FE Layer-2 cache requirement (cyberfabric/cyber-insight-front#66 Step 3 implementation rules) is satisfied directly from the wire — no client-side derivation, no `metric_key` overlap heuristic.
+- Good, because the FE Layer-2 cache requirement (constructorfabric/insight-front#66 Step 3 implementation rules) is satisfied directly from the wire — no client-side derivation, no `metric_key` overlap heuristic.
 - Good, because the mapping ships with the catalog response — one round-trip, one TTL boundary, one invalidation event. No new endpoint to plumb auth + caching through.
 - Good, because the grouping shape (`query_id` → list of `catalog_metric_ids`) makes the time/filter invariance visible at the protocol layer: links is a top-level field, NOT a property of each metric, so a consumer can't accidentally re-fetch it per value request.
 - Bad, because `links` grows with every (query, catalog) pair the backfill adds. v1 ceiling: ~70 rows after the IC-extras + V2 catalog batches. If that grows to thousands, this decision is revisited — but the v1 ceiling is comfortable.
@@ -97,5 +97,5 @@ Cache integration: `links` is cached as part of the `CatalogResponse` payload �
 - Junction migration: `src/backend/services/analytics-api/src/migration/m20260529_000001_metric_query_catalog_link.rs` (introduced by ADR-001).
 - Resolver implementation: `src/backend/services/analytics-api/src/domain/catalog/resolver.rs::fetch_links`.
 - Wire shape: `src/backend/services/analytics-api/src/domain/catalog/response.rs::MetricQueryLink`.
-- FE consumer requirement: cyberfabric/cyber-insight-front#66 — Step 3 "Two-layer caching".
+- FE consumer requirement: constructorfabric/insight-front#66 — Step 3 "Two-layer caching".
 - Companion ADR-002 surfaces `metric_key` on each catalog row for the same transitional release.

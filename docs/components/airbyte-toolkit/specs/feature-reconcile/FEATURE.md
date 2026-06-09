@@ -307,7 +307,7 @@ First-time publish of a nocode connector via builder/create + builder/publish. T
 **Trigger**: reconcile sees a descriptor with `type=cdk` whose definition does not exist in Airbyte (custom:true filter applied per ADR-0009).
 
 **Steps**:
-1. [ ] - `p2` - Read `descriptor.images.cdk.image` (full image reference; e.g. `ghcr.io/cyberfabric/source-bitbucket-cloud-insight:2026.04.21.16.10-b36cf42`) - `inst-pcd-read-image`
+1. [ ] - `p2` - Read `descriptor.images.cdk.image` (full image reference; e.g. `ghcr.io/constructorfabric/source-bitbucket-cloud-insight:2026.04.21.16.10-b36cf42`) - `inst-pcd-read-image`
 2. [ ] - `p2` - **CALL** `cpt-insightspec-algo-reconcile-create-cdk-definition` → sourceDefinitionId - `inst-pcd-create`
 3. [ ] - `p2` - **RETURN** sourceDefinitionId - `inst-pcd-return`
 
@@ -687,7 +687,7 @@ When iterating definitions, skip those with `custom != true`. Insight namespace 
 
 - [ ] `p1` - **ID**: `cpt-insightspec-algo-reconcile-create-cdk-definition`
 
-**Inputs**: `workspace_id`, `connector` (slug), `cdk_image` (full image reference from `descriptor.images.cdk.image`, e.g. `ghcr.io/cyberfabric/source-bitbucket-cloud-insight:2026.04.21.16.10-b36cf42`)
+**Inputs**: `workspace_id`, `connector` (slug), `cdk_image` (full image reference from `descriptor.images.cdk.image`, e.g. `ghcr.io/constructorfabric/source-bitbucket-cloud-insight:2026.04.21.16.10-b36cf42`)
 **Outputs**: `sourceDefinitionId` (UUID), or WARN+skip if `cdk_image` missing
 
 **Steps**:

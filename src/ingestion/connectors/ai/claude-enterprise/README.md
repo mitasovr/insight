@@ -114,4 +114,4 @@ cypilot validate --artifact docs/components/connectors/ai/claude-enterprise/spec
 
 ## Related
 
-- Sibling connector (different API): `claude-admin` — Anthropic Admin API for organization metadata, token usage, cost reports, Claude Code usage, API keys, workspaces, and invites (merged from the former `claude-api` and `claude-team` connectors per [cyberfabric/insight#141](https://github.com/cyberfabric/insight/issues/141))
+- Sibling connector (different API): `claude-admin` — Anthropic Admin API for organization metadata, token usage, cost reports, Claude Code usage, API keys, workspaces, and invites (merged from the former `claude-api` and `claude-team` connectors per [constructorfabric/insight#141](https://github.com/constructorfabric/insight/issues/141))

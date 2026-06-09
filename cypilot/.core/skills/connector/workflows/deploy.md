@@ -34,7 +34,7 @@ If the connector is new, it creates a builder project and publishes a new defini
 ./airbyte-toolkit/build-connector.sh {category}/{name}
 
 # Remote (push to registry):
-IMAGE_REGISTRY=ghcr.io/cyberfabric IMAGE_TAG=latest ./airbyte-toolkit/build-connector.sh {category}/{name} --push
+IMAGE_REGISTRY=ghcr.io/constructorfabric IMAGE_TAG=latest ./airbyte-toolkit/build-connector.sh {category}/{name} --push
 ```
 
 This builds the Docker image, pushes to registry (or loads into Kind for local dev), and registers/updates the Airbyte source definition.

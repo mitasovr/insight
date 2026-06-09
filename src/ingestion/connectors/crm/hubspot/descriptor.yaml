@@ -12,7 +12,7 @@ images:
     name: source-hubspot-insight
     dockerfile: ./Dockerfile
     context: .
-    image: "ghcr.io/cyberfabric/source-hubspot-insight:2026.05.30.18.54-885b1e2"
+    image: "ghcr.io/constructorfabric/source-hubspot-insight:2026.05.30.18.54-885b1e2"
 
 dbt_select: "tag:hubspot+"
 

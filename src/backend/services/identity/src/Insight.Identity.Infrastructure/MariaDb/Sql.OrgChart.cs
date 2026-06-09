@@ -4,7 +4,7 @@ namespace Insight.Identity.Infrastructure.MariaDb;
 /// SQL statements against <c>org_chart</c>, the SCD2 cache of
 /// parent->child edges derived from <c>persons</c> observations with
 /// <c>value_type='parent_person_id'</c>. Phase 1 of
-/// cyberfabric/cyber-insight#348.
+/// constructorfabric/insight#348.
 ///
 /// All queries read CURRENT edges only (<c>valid_to IS NULL</c>).
 /// Temporal as-of queries (Phase 3+) will use a different statement
