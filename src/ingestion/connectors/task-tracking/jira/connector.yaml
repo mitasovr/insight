@@ -6317,7 +6317,7 @@ streams:
         parent_stream_configs:
           - type: ParentStreamConfig
             stream:
-              $ref: "#/streams/4"
+              $ref: "#/streams/13"
             parent_key: id_readable
             partition_field: id_readable
             incremental_dependency: true
@@ -6535,7 +6535,7 @@ streams:
         parent_stream_configs:
           - type: ParentStreamConfig
             stream:
-              $ref: "#/streams/4"
+              $ref: "#/streams/13"
             parent_key: id_readable
             partition_field: id_readable
             incremental_dependency: true
@@ -6935,7 +6935,7 @@ streams:
         parent_stream_configs:
           - type: ParentStreamConfig
             stream:
-              $ref: "#/streams/4"
+              $ref: "#/streams/13"
             parent_key: id_readable
             partition_field: id_readable
             incremental_dependency: true
@@ -7888,6 +7888,164 @@ streams:
               - "null"
         required:
           - unique_key
+        additionalProperties: true
+
+  # ─── Lightweight parent for issue substreams ──────────────────────────
+  # SubstreamPartitionRouter parent for jira_issue_history, jira_comments and
+  # jira_worklogs — it enumerates issue keys and deliberately requests a
+  # minimal field set ("updated" for the cursor; id/key come back at the top
+  # level for free) instead of the full jira_issue payload (fields=*all +
+  # expand=names). The CDK auto-caches a substream parent's HTTP responses in
+  # SQLite; caching the full jira_issue responses (~2 MB each on instances
+  # with ~1000 fields) ballooned that cache to ~226 MB and stalled the sync
+  # with no records emitted. Keeping the parent responses tiny keeps the
+  # cache small. jira_issue itself stays the full-record emitter but is no
+  # longer a substream parent, so it is read once and not cached.
+  #
+  # Reconcile (ADR-0015) auto-selects every discovered stream, so this lands
+  # as a real (tiny: key + updated per issue) bronze_jira.jira_issue_keys
+  # table. It therefore carries the standard identity stamp
+  # (tenant_id/source_id/unique_key) and is promoted to RMT in
+  # dbt/jira__bronze_promoted.sql like every other jira bronze table.
+  - type: DeclarativeStream
+    name: jira_issue_keys
+    primary_key:
+      - unique_key
+    retriever:
+      type: SimpleRetriever
+      record_selector:
+        type: RecordSelector
+        extractor:
+          type: DpathExtractor
+          field_path:
+            - issues
+      paginator:
+        type: DefaultPaginator
+        page_size_option:
+          type: RequestOption
+          inject_into: request_parameter
+          field_name: maxResults
+        page_token_option:
+          type: RequestOption
+          inject_into: request_parameter
+          field_name: nextPageToken
+        pagination_strategy:
+          type: CursorPagination
+          page_size: 100
+          cursor_value: "{{ response.get('nextPageToken', '') }}"
+          stop_condition: "{{ not response.get('nextPageToken') }}"
+      requester:
+        type: HttpRequester
+        http_method: GET
+        authenticator:
+          $ref: "#/definitions/linked/HttpRequester/authenticator"
+        error_handler:
+          $ref: "#/definitions/linked/HttpRequester/error_handler"
+        request_parameters:
+          jql: >-
+            project IN ({{ config['jira_project_keys'] }}) AND updated >= "{{
+            stream_slice.start_time }}" AND updated <= "{{ stream_slice.end_time
+            }}" ORDER BY updated ASC
+          fields: updated
+        url: "{{ config['jira_instance_url'] }}/rest/api/3/search/jql"
+    incremental_sync:
+      type: DatetimeBasedCursor
+      cursor_field: updated
+      cursor_datetime_formats:
+        - "%Y-%m-%dT%H:%M:%S.%f%z"
+        - "%Y-%m-%d %H:%M"
+        - "%Y-%m-%d"
+      datetime_format: "%Y-%m-%d %H:%M"
+      cursor_granularity: PT1M
+      start_datetime:
+        type: MinMaxDatetime
+        datetime: "{{ config.get('jira_start_date', '2020-01-01') }}"
+        datetime_format: "%Y-%m-%d"
+      end_datetime:
+        type: MinMaxDatetime
+        datetime: "{{ now_utc().strftime('%Y-%m-%d %H:%M') }}"
+        datetime_format: "%Y-%m-%d %H:%M"
+      step: P30D
+      lookback_window: PT1H
+    transformations:
+      - type: AddFields
+        fields:
+          - type: AddedFieldDefinition
+            path:
+              - tenant_id
+            value: "{{ config['insight_tenant_id'] }}"
+          - type: AddedFieldDefinition
+            path:
+              - source_id
+            value: "{{ config['insight_source_id'] }}"
+      - type: AddFields
+        fields:
+          - type: AddedFieldDefinition
+            path:
+              - unique_key
+            value: >-
+              {{ config['insight_tenant_id'] }}-{{ config['insight_source_id']
+              }}-{{ record['key'] }}
+          - type: AddedFieldDefinition
+            path:
+              - id_readable
+            value: "{{ record['key'] }}"
+          - type: AddedFieldDefinition
+            path:
+              - jira_id
+            value: "{{ record['id'] }}"
+          # Hoist the cursor field to the top level: /search/jql returns it
+          # nested as fields.updated, but DatetimeBasedCursor reads
+          # record['updated'] (jira_issue does the same hoist).
+          - type: AddedFieldDefinition
+            path:
+              - updated
+            value: "{{ (record.get('fields') or {}).get('updated') }}"
+          - type: AddedFieldDefinition
+            path:
+              - collected_at
+            value: "{{ now_utc().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z' }}"
+    schema_loader:
+      type: InlineSchemaLoader
+      schema:
+        type: object
+        $schema: http://json-schema.org/schema#
+        properties:
+          id:
+            type:
+              - string
+              - "null"
+          key:
+            type:
+              - string
+              - "null"
+          tenant_id:
+            type:
+              - string
+              - "null"
+          source_id:
+            type:
+              - string
+              - "null"
+          unique_key:
+            type: string
+          id_readable:
+            type:
+              - string
+              - "null"
+          jira_id:
+            type:
+              - string
+              - "null"
+          updated:
+            type: string
+          collected_at:
+            type:
+              - string
+              - "null"
+        required:
+          - unique_key
+          - updated
         additionalProperties: true
 
 spec:
