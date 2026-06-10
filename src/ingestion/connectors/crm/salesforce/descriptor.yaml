@@ -12,7 +12,7 @@ images:
     name: source-salesforce-insight
     dockerfile: ./Dockerfile
     context: .
-    image: "ghcr.io/cyberfabric/source-salesforce-insight:2026.05.22.13.03-5cdda7c"
+    image: "ghcr.io/constructorfabric/source-salesforce-insight:2026.05.22.13.03-5cdda7c"
 
 dbt_select: "tag:salesforce+"
 

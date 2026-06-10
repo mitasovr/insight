@@ -13,7 +13,7 @@ images:
     name: source-github-copilot-insight
     dockerfile: ./Dockerfile
     context: .
-    image: "ghcr.io/cyberfabric/source-github-copilot-insight:2026.05.22.13.03-5cdda7c"
+    image: "ghcr.io/constructorfabric/source-github-copilot-insight:2026.05.22.13.03-5cdda7c"
 
 # Silver routing: `copilot__ai_dev_usage` feeds class_ai_dev_usage with
 # tool='copilot' (active). `copilot__ai_org_usage` is deferred until

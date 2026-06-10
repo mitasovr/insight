@@ -15,7 +15,7 @@ images:
     name: insight-jira-enrich
     dockerfile: ./enrich/Dockerfile
     context: ./enrich
-    image: "ghcr.io/cyberfabric/insight-jira-enrich:2026.05.22.13.03-5cdda7c"
+    image: "ghcr.io/constructorfabric/insight-jira-enrich:2026.05.22.13.03-5cdda7c"
 
 # Silver routing (class_task_*) is delivered by the task-tracking Silver layer
 # package, not by this connector. The pipeline runs the jira-rust path:

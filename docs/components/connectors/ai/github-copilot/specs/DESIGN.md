@@ -422,7 +422,7 @@ The model **MUST** project a `_version` column (`toUnixTimestamp64Milli(_airbyte
 
 When activated, this staging **MUST** follow ADR-0001: same config block as `copilot__ai_dev_usage.sql` above, `_version` column from `_airbyte_extracted_at`.
 
-**Tracking**: PRD OQ-COP-2 owns the `class_ai_org_usage` creation question. A dedicated GitHub issue **MUST** be filed under `cyberfabric/insight` referencing OQ-COP-2 before this model is activated; the issue link is to be added here once filed (target: Q3 2026 per PRD §13).
+**Tracking**: PRD OQ-COP-2 owns the `class_ai_org_usage` creation question. A dedicated GitHub issue **MUST** be filed under `constructorfabric/insight` referencing OQ-COP-2 before this model is activated; the issue link is to be added here once filed (target: Q3 2026 per PRD §13).
 
 ##### What Copilot does **not** feed
 

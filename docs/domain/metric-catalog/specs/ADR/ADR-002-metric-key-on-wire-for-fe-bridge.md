@@ -19,7 +19,7 @@ DESIGN.md §3.3 originally pinned a hard invariant:
 
 The rationale was layer-boundary hygiene — `metric_key` is the backend-internal `<table_name>.<column_name>` identifier and surfacing it would couple consumers to source-schema naming. Consumers were intended to key everything off `id` (UUIDv7) and render `label`.
 
-That invariant breaks the transitional release for cyberfabric/cyber-insight-front#66:
+That invariant breaks the transitional release for constructorfabric/insight-front#66:
 
 1. The FE today carries hand-authored constants — `BULLET_DEFS`, `IC_KPI_DEFS`, `METRIC_SEMANTICS` — keyed by `metric_key` strings (`task_delivery_bullet_rows.tasks_completed`, `ic_kpis.bugs_fixed`, etc.).
 2. To delete those constants safely, the FE has to first prove byte-for-byte parity between catalog-hydrated rendering and the legacy compile-in rendering (PRD §12 risk mitigation — "hold the frontend-delete step until comparison passes").
@@ -102,5 +102,5 @@ Per the additive-field stability contract, the field can be added without a majo
 
 - Wire-shape struct: `src/backend/services/analytics-api/src/domain/catalog/response.rs`
 - DESIGN amendment: `docs/domain/metric-catalog/specs/DESIGN.md` §3.3 Catalog Consumer Contract — the "MUST NOT be reverse-engineered" sentence is narrowed.
-- FE issue: cyberfabric/cyber-insight-front#66 — the consumer that needs this bridge.
+- FE issue: constructorfabric/insight-front#66 — the consumer that needs this bridge.
 - Companion ADR-003 surfaces the `metric_query_catalog` link map for the same transitional release.

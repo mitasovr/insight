@@ -64,8 +64,8 @@ Ship with the toolbox image built off this branch. The Dockerfile (`src/ingestio
 `ingestion.toolboxImage` Helm value must point at the new tag. The chart does not ship a default tag (toolbox versioning is operator-owned).
 
 Two debug images are already published:
-- `ghcr.io/cyberfabric/insight-toolbox:2026.05.08.10.21-82fe1ad`
-- `ghcr.io/cyberfabric/insight-toolbox:2026.05.08.10.35-82fe1ad-statfix` (with the GNU-stat ordering fix in `ab_get_token`)
+- `ghcr.io/constructorfabric/insight-toolbox:2026.05.08.10.21-82fe1ad`
+- `ghcr.io/constructorfabric/insight-toolbox:2026.05.08.10.35-82fe1ad-statfix` (with the GNU-stat ordering fix in `ab_get_token`)
 
 Production deploys should rebuild after merge so the tag reflects the merged SHA.
 

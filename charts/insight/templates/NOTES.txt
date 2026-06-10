@@ -39,7 +39,7 @@ Next steps:
   2. Open the frontend locally:
        kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "insight.frontend.host" . }} 8080:80
 
-  3. Docs: https://github.com/cyberfabric/insight
+  3. Docs: https://github.com/constructorfabric/insight
 
 {{- /* Only warn when auth is enabled, no existingSecret is set,
        and inline issuer is also empty — i.e. operator hasn't picked

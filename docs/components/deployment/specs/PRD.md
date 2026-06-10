@@ -47,7 +47,7 @@ date: 2026-05-12
 
 ### 1.1 Purpose
 
-The Deployment subsystem produces **one releasable artifact** for the Insight platform — the `insight` umbrella Helm chart, published per-merge to `oci://ghcr.io/cyberfabric/charts/insight:<semver>`. That single artifact is consumed by two distinct paths: the private `infra/insight-gitops` repository, which drives every Cyberfabric-operated cluster (internal `dev` / `test` / `stage` and each customer-named production cluster — `virtuozzo`, `constructor`, `acronis`, …), and any external Helm-aware consumer that wants to run Insight on their own terms (helm, ArgoCD, Flux, kustomize render). The same chart also powers the developer bring-up wrapper `dev-up.sh`, which targets a local Kind/OrbStack cluster.
+The Deployment subsystem produces **one releasable artifact** for the Insight platform — the `insight` umbrella Helm chart, published per-merge to `oci://ghcr.io/constructorfabric/charts/insight:<semver>`. That single artifact is consumed by two distinct paths: the private `infra/insight-gitops` repository, which drives every Cyberfabric-operated cluster (internal `dev` / `test` / `stage` and each customer-named production cluster — `virtuozzo`, `constructor`, `acronis`, …), and any external Helm-aware consumer that wants to run Insight on their own terms (helm, ArgoCD, Flux, kustomize render). The same chart also powers the developer bring-up wrapper `dev-up.sh`, which targets a local Kind/OrbStack cluster.
 
 The subsystem does not ship product functionality on its own — it composes the application services (API Gateway, Analytics API, Frontend, optional Identity Resolution) with their required infrastructure (ClickHouse, MariaDB, Redis, Redpanda, Airbyte, Argo Workflows) into a versioned chart, enforces the contracts between them (single-namespace dev mode, layered L0/L2/L3 gitops mode, external-mode infra contracts, fail-fast validation, mandatory OIDC in production) and provides the dev wrapper. Orchestration of *customer* installs that are not Cyberfabric-operated is explicitly out of scope: external chart consumers pick their own tooling.
 
@@ -71,8 +71,8 @@ The third driver is reproducibility for the development team itself: a developer
 
 | Term | Definition |
 |------|------------|
-| Umbrella chart | The `charts/insight/` Helm chart that aggregates all Insight subcharts (infra + app services + ingestion templates) via Chart.yaml dependencies. Published per merge to `oci://ghcr.io/cyberfabric/charts/insight:<semver>`. |
-| Chart Publishing CI | The GitHub Actions workflow in `cyberfabric/insight` that, on every merge to `main`, builds the changed service images, bumps the affected subcharts' `appVersion` to the build tag, patch-bumps the umbrella's `version`, sets the umbrella `appVersion` to the build tag, packages the chart, and pushes it to GHCR. |
+| Umbrella chart | The `charts/insight/` Helm chart that aggregates all Insight subcharts (infra + app services + ingestion templates) via Chart.yaml dependencies. Published per merge to `oci://ghcr.io/constructorfabric/charts/insight:<semver>`. |
+| Chart Publishing CI | The GitHub Actions workflow in `constructorfabric/insight` that, on every merge to `main`, builds the changed service images, bumps the affected subcharts' `appVersion` to the build tag, patch-bumps the umbrella's `version`, sets the umbrella `appVersion` to the build tag, packages the chart, and pushes it to GHCR. |
 | Dev wrapper | `dev-up.sh` (and `dev-down.sh`) — bring-up scripts that build images from source, create a local Kind/OrbStack cluster, and install the same umbrella chart with all `<svc>.deploy: true` for a single-namespace fat install. |
 | Gitops repo | Private `infra/insight-gitops` settings-only repository on internal GitLab that drives every Cyberfabric-operated cluster. Pins exactly one umbrella semver per environment via `.insight-version` and pulls the chart from OCI at deploy time; does **not** vendor the chart. |
 | L0 / L2 / L3 | Three deploy layers used by gitops production: **L0 Bootstrap** (cluster prerequisites — sealed-secrets-controller, ingress-nginx, cert-manager — cluster-scoped, runs once per cluster); **L2 System** (shared stateful infra — MariaDB, ClickHouse, Redis, Redpanda + Console, Airbyte, Argo Workflows — one Helm release per service in the `insight-infra` namespace, each replaceable by a managed external endpoint); **L3 App** (the umbrella chart, app services only, in the `insight` namespace). There is no L1 — that number is reserved for cluster provisioning, which is out of scope. |
@@ -92,7 +92,7 @@ The third driver is reproducibility for the development team itself: a developer
 
 **ID**: `cpt-insightspec-actor-customer-sre`
 
-**Role**: External operator (customer SRE, partner, evaluator) who pulls the published umbrella chart from `oci://ghcr.io/cyberfabric/charts/insight` and installs it on a Kubernetes cluster they own, using whatever tooling they prefer (helm, ArgoCD, Flux, Terraform Helm provider, Argo Rollouts, custom GitOps). They are **not** Cyberfabric-operated and are not granted access to `infra/insight-gitops`.
+**Role**: External operator (customer SRE, partner, evaluator) who pulls the published umbrella chart from `oci://ghcr.io/constructorfabric/charts/insight` and installs it on a Kubernetes cluster they own, using whatever tooling they prefer (helm, ArgoCD, Flux, Terraform Helm provider, Argo Rollouts, custom GitOps). They are **not** Cyberfabric-operated and are not granted access to `infra/insight-gitops`.
 **Needs**: A stable artifact reference with semver tags, a documented values contract (the chart README), explicit documentation for external-mode overrides, a path to roll back failed upgrades, and clear failure messages when required values are missing. Does not need an opinionated installer — picks their own orchestration.
 
 #### Constructor Platform Operator
@@ -128,13 +128,13 @@ The third driver is reproducibility for the development team itself: a developer
 
 **ID**: `cpt-insightspec-actor-helm`
 
-**Role**: Package manager used by every consumer path (the gitops Makefile, `dev-up.sh`, and any external consumer). The umbrella ships as a Helm chart at `oci://ghcr.io/cyberfabric/charts/insight`; Airbyte and Argo Workflows are their upstream Helm charts pinned per L2 system release (gitops) or installed via dev-helper scripts (`dev-up.sh`).
+**Role**: Package manager used by every consumer path (the gitops Makefile, `dev-up.sh`, and any external consumer). The umbrella ships as a Helm chart at `oci://ghcr.io/constructorfabric/charts/insight`; Airbyte and Argo Workflows are their upstream Helm charts pinned per L2 system release (gitops) or installed via dev-helper scripts (`dev-up.sh`).
 
 #### Chart Publishing CI
 
 **ID**: `cpt-insightspec-actor-chart-publishing-ci`
 
-**Role**: GitHub Actions workflow in `cyberfabric/insight` that, on every merge to `main`, builds the changed service images, bumps the affected subcharts' `appVersion` to the build tag, patch-bumps the umbrella's `version`, sets the umbrella `appVersion` to the build tag, runs `helm dependency update`, packages the umbrella and pushes it to `oci://ghcr.io/cyberfabric/charts/insight:<semver>`. Auto-commits the version bumps back to `main` so the repo state matches what was published.
+**Role**: GitHub Actions workflow in `constructorfabric/insight` that, on every merge to `main`, builds the changed service images, bumps the affected subcharts' `appVersion` to the build tag, patch-bumps the umbrella's `version`, sets the umbrella `appVersion` to the build tag, runs `helm dependency update`, packages the umbrella and pushes it to `oci://ghcr.io/constructorfabric/charts/insight:<semver>`. Auto-commits the version bumps back to `main` so the repo state matches what was published.
 
 #### Argo Workflows Controller
 
@@ -152,7 +152,7 @@ The third driver is reproducibility for the development team itself: a developer
 
 **ID**: `cpt-insightspec-actor-artifact-registry`
 
-**Role**: Source of record for the umbrella chart (`oci://ghcr.io/cyberfabric/charts/insight`) and application images (`ghcr.io/cyberfabric/insight-*`). Public, read-only to consumers; written by Chart Publishing CI from `cyberfabric/insight` on merge to `main`. The chart `charts/` URL segment is part of the GHCR package name (standard Helm-OCI behaviour).
+**Role**: Source of record for the umbrella chart (`oci://ghcr.io/constructorfabric/charts/insight`) and application images (`ghcr.io/constructorfabric/insight-*`). Public, read-only to consumers; written by Chart Publishing CI from `constructorfabric/insight` on merge to `main`. The chart `charts/` URL segment is part of the GHCR package name (standard Helm-OCI behaviour).
 
 ## 3. Operational Concept & Environment
 
@@ -176,7 +176,7 @@ The third driver is reproducibility for the development team itself: a developer
 - The single `{release}-platform` ConfigMap that exposes resolved infra coordinates to every pod in the namespace via `envFrom`.
 - Argo `WorkflowTemplate` emission as first-class Helm templates under `charts/insight/templates/ingestion/*.yaml`, gated by `ingestion.templates.enabled` and consuming umbrella helpers (`insight.clickhouse.fqdn`, `insight.airbyte.url`, …) directly via `include`.
 - The dual-purpose `<svc>.deploy: true|false` toggle: same chart powers `dev-up.sh` single-namespace fat installs and gitops production layered installs.
-- The Chart Publishing CI workflow that publishes the umbrella to `oci://ghcr.io/cyberfabric/charts/insight:<semver>` per merge to `main`; the per-subchart `appVersion = image tag` contract; the umbrella semver versioning rules; `.insight-version` as the single gitops pin.
+- The Chart Publishing CI workflow that publishes the umbrella to `oci://ghcr.io/constructorfabric/charts/insight:<semver>` per merge to `main`; the per-subchart `appVersion = image tag` contract; the umbrella semver versioning rules; `.insight-version` as the single gitops pin.
 - Developer bring-up wrappers `dev-up.sh` / `dev-down.sh` / `init.sh`, parameterised by `INSIGHT_NAMESPACE`, with Kind bootstrap, image build + `kind load`, and port-forwards for the common UIs.
 - Dev-only credential overlay `deploy/values-dev.yaml` (throwaway passwords) applied automatically by `dev-up.sh`.
 - The DEVLOG.md that records the first-run debugging narrative so future developers and dev-up users can resolve the same twelve issues without rediscovering them.
@@ -201,7 +201,7 @@ The third driver is reproducibility for the development team itself: a developer
 
 - [ ] `p1` - **ID**: `cpt-insightspec-fr-dep-umbrella-chart`
 
-The system **MUST** ship a single Helm umbrella chart named `insight` that aggregates the four infrastructure subcharts (ClickHouse, MariaDB, Redis, Redpanda) and the four application subcharts (API Gateway, Analytics API, Frontend, Identity Resolution) as declared dependencies in `Chart.yaml`, so that a single `helm install insight oci://ghcr.io/cyberfabric/charts/insight --version <X.Y.Z>` renders every Kubernetes object that the platform requires.
+The system **MUST** ship a single Helm umbrella chart named `insight` that aggregates the four infrastructure subcharts (ClickHouse, MariaDB, Redis, Redpanda) and the four application subcharts (API Gateway, Analytics API, Frontend, Identity Resolution) as declared dependencies in `Chart.yaml`, so that a single `helm install insight oci://ghcr.io/constructorfabric/charts/insight --version <X.Y.Z>` renders every Kubernetes object that the platform requires.
 
 **Rationale**: A single artifact is what every consumer (Cyberfabric SRE pinning one version per env, Constructor Platform integrating as a tenant, external evaluators) can version, roll back and audit. Multiple independent releases are not a product.
 
@@ -285,7 +285,7 @@ The umbrella chart **MUST** resolve every infra host, port, FQDN and URL through
 
 - [ ] `p1` - **ID**: `cpt-insightspec-fr-dep-chart-publishing`
 
-The system **MUST**, on every merge to `main` of `cyberfabric/insight`, build the changed service images, bump the affected subcharts' `appVersion` to the build tag, patch-bump the umbrella's `version`, set the umbrella `appVersion` to the build tag, run `helm dependency update`, package the umbrella chart and push it to `oci://ghcr.io/cyberfabric/charts/insight:<umbrella-version>`. The workflow **MUST** auto-commit the version bumps back to `main` so the repo state matches what was published. The rationale is captured in [ADR-0001](./ADR/0001-chart-publishing-on-merge.md).
+The system **MUST**, on every merge to `main` of `constructorfabric/insight`, build the changed service images, bump the affected subcharts' `appVersion` to the build tag, patch-bump the umbrella's `version`, set the umbrella `appVersion` to the build tag, run `helm dependency update`, package the umbrella chart and push it to `oci://ghcr.io/constructorfabric/charts/insight:<umbrella-version>`. The workflow **MUST** auto-commit the version bumps back to `main` so the repo state matches what was published. The rationale is captured in [ADR-0001](./ADR/0001-chart-publishing-on-merge.md).
 
 **Rationale**: Eliminates chart-vs-image drift structurally — both come from the same CI run on the same commit. One pin per gitops env. Per-service granularity preserved because each subchart's `appVersion` advances independently. Chart consumers outside Cyberfabric get a stable artifact reference.
 
@@ -295,7 +295,7 @@ The system **MUST**, on every merge to `main` of `cyberfabric/insight`, build th
 
 - [ ] `p1` - **ID**: `cpt-insightspec-fr-dep-oci-distribution`
 
-The umbrella chart **MUST** be addressable by every consumer at `oci://ghcr.io/cyberfabric/charts/insight:<semver>`. Any consumer — Cyberfabric SRE through the gitops Makefile, Constructor Platform, external customers, ArgoCD/Flux users — pulls the chart by that reference and a semver tag. No other public deploy path (no canonical installer, no App-of-Apps shipped from `cyberfabric/insight`) is documented or supported.
+The umbrella chart **MUST** be addressable by every consumer at `oci://ghcr.io/constructorfabric/charts/insight:<semver>`. Any consumer — Cyberfabric SRE through the gitops Makefile, Constructor Platform, external customers, ArgoCD/Flux users — pulls the chart by that reference and a semver tag. No other public deploy path (no canonical installer, no App-of-Apps shipped from `constructorfabric/insight`) is documented or supported.
 
 **Rationale**: A single artifact reference makes promotion (`.insight-version` bump) atomic and is the only contract external consumers need.
 
@@ -346,7 +346,7 @@ For Cyberfabric-operated clusters, the system **MUST** model the deploy as three
 
 - **L0 Bootstrap** — cluster prerequisites (sealed-secrets-controller, ingress-nginx, cert-manager) plus the `insight-infra` and `insight` namespaces. Cluster-scoped, runs once per cluster.
 - **L2 System** — shared stateful infrastructure (MariaDB, ClickHouse, Redis, Redpanda, Redpanda Console, Airbyte, Argo Workflows). One Helm release per service in `insight-infra`. Each service can be self-hosted or replaced by a managed external endpoint without changing the umbrella's values surface — the L3 app values point at the actual host either way.
-- **L3 App** — the umbrella chart, app services only, in the `insight` namespace. Pulled from `oci://ghcr.io/cyberfabric/charts/insight` pinned to `.insight-version`.
+- **L3 App** — the umbrella chart, app services only, in the `insight` namespace. Pulled from `oci://ghcr.io/constructorfabric/charts/insight` pinned to `.insight-version`.
 
 An L3 upgrade **MUST NOT** re-roll an L2 service; an L2 service upgrade **MUST NOT** re-roll L3 app pods. Cross-layer wiring **MUST** use Kubernetes DNS (`<release>.insight-infra.svc.cluster.local`) or explicit `<svc>.host` values.
 
@@ -458,7 +458,7 @@ A chart render that is missing any of the following **MUST** abort during `helm 
 
 - [ ] `p2` - **ID**: `cpt-insightspec-nfr-dep-chart-publish-freshness`
 
-Every merge to `main` of `cyberfabric/insight` **MUST** publish a new umbrella chart tag to `oci://ghcr.io/cyberfabric/charts/insight` within 15 minutes of the merge commit. The gitops `auto_envs` poller **MUST** pick up the new tag within one hour (cron `0 * * * *`) and commit a `.insight-version` bump for envs in `auto_envs` (currently `[dev]`).
+Every merge to `main` of `constructorfabric/insight` **MUST** publish a new umbrella chart tag to `oci://ghcr.io/constructorfabric/charts/insight` within 15 minutes of the merge commit. The gitops `auto_envs` poller **MUST** pick up the new tag within one hour (cron `0 * * * *`) and commit a `.insight-version` bump for envs in `auto_envs` (currently `[dev]`).
 
 **Threshold**: p95 publish time ≤ 15 min from merge to OCI tag visible; poller lag ≤ 60 min from publish to gitops bump on auto-envs.
 
@@ -500,9 +500,9 @@ Every merge to `main` of `cyberfabric/insight` **MUST** publish a new umbrella c
 
 **Type**: Helm OCI repository.
 
-**Stability**: stable URL (`oci://ghcr.io/cyberfabric/charts/insight`), per-tag artifacts are immutable.
+**Stability**: stable URL (`oci://ghcr.io/constructorfabric/charts/insight`), per-tag artifacts are immutable.
 
-**Description**: The single addressable artifact every consumer pulls. Tags are semver, one published per merge to `main` of `cyberfabric/insight`. The `charts/` URL segment is part of the GHCR package name (standard Helm-OCI behaviour). Subchart and app images live at `ghcr.io/cyberfabric/insight-<service>:<buildtag>`; their tags are referenced from the published chart's per-subchart `appVersion` field.
+**Description**: The single addressable artifact every consumer pulls. Tags are semver, one published per merge to `main` of `constructorfabric/insight`. The `charts/` URL segment is part of the GHCR package name (standard Helm-OCI behaviour). Subchart and app images live at `ghcr.io/constructorfabric/insight-<service>:<buildtag>`; their tags are referenced from the published chart's per-subchart `appVersion` field.
 
 **Breaking Change Policy**: tags are immutable; the publishing CI does not overwrite. Retention policy on GHCR may delete old tags; consumers pinning a specific version SHOULD mirror to their own registry for long-term reproducibility.
 
@@ -534,7 +534,7 @@ Every merge to `main` of `cyberfabric/insight` **MUST** publish a new umbrella c
 
 **Direction**: required from client (the chart consumer needs read access to GHCR).
 
-**Protocol/Format**: OCI Helm pull (`helm pull oci://ghcr.io/cyberfabric/charts/insight --version <X.Y.Z>`).
+**Protocol/Format**: OCI Helm pull (`helm pull oci://ghcr.io/constructorfabric/charts/insight --version <X.Y.Z>`).
 
 **Compatibility**: Helm 3.14+ required for OCI chart pulls and registry authentication. GHCR-side publishing uses standard Helm-OCI, no `oras`-specific paths.
 
@@ -574,7 +574,7 @@ Every merge to `main` of `cyberfabric/insight` **MUST** publish a new umbrella c
 **Main Flow**:
 
 1. Operator pre-creates `insight-db-creds` in the target namespace with the platform-issued passwords, then prepares an overlay values file that sets `credentials.autoGenerate: false`, `clickhouse.deploy: false`, `mariadb.deploy: false`, `redis.deploy: false`, `redpanda.deploy: false`, each with the matching flat `host` / `port` / `passwordSecret` block, pointing at the platform's services.
-2. Operator runs `helm upgrade --install insight oci://ghcr.io/cyberfabric/charts/insight --version <X.Y.Z> --namespace <ns> -f overlay.yaml` (or wires the same artifact reference into their ArgoCD/Flux setup).
+2. Operator runs `helm upgrade --install insight oci://ghcr.io/constructorfabric/charts/insight --version <X.Y.Z> --namespace <ns> -f overlay.yaml` (or wires the same artifact reference into their ArgoCD/Flux setup).
 3. The umbrella's validator verifies every `<dep>.host` is present and every `<dep>.passwordSecret.{name,key}` resolves; `lookup` reads `insight-db-creds` and refuses to render with a missing or empty key.
 4. Helm deploys application services that talk to the shared platform infra through the platform ConfigMap.
 
@@ -604,9 +604,9 @@ Every merge to `main` of `cyberfabric/insight` **MUST** publish a new umbrella c
 
 ## 9. Acceptance Criteria
 
-- [ ] `helm template insight oci://ghcr.io/cyberfabric/charts/insight --version <X.Y.Z>` with no overlay aborts with a readable message because OIDC and credentials are empty — zero successful renders of a misconfigured install.
+- [ ] `helm template insight oci://ghcr.io/constructorfabric/charts/insight --version <X.Y.Z>` with no overlay aborts with a readable message because OIDC and credentials are empty — zero successful renders of a misconfigured install.
 - [ ] `helm template insight charts/insight -f deploy/values-dev.yaml` renders cleanly and produces every required Kubernetes object, including the three Argo `WorkflowTemplate` objects.
-- [ ] On a merge to `main` of `cyberfabric/insight` that changes one service, the publish-chart workflow builds the image, bumps that subchart's `appVersion`, patch-bumps the umbrella, packages and pushes `oci://ghcr.io/cyberfabric/charts/insight:<new-semver>`, and auto-commits the version bumps back to `main`.
+- [ ] On a merge to `main` of `constructorfabric/insight` that changes one service, the publish-chart workflow builds the image, bumps that subchart's `appVersion`, patch-bumps the umbrella, packages and pushes `oci://ghcr.io/constructorfabric/charts/insight:<new-semver>`, and auto-commits the version bumps back to `main`.
 - [ ] `helm template` of the pulled chart confirms `image.tag` for the changed service equals the new build tag, others equal their previous tags.
 - [ ] `./dev-up.sh` on a fresh laptop installs Airbyte, Argo and the umbrella into the local `insight` namespace; all pods reach Ready without manual intervention.
 - [ ] Two concurrent installs in namespaces `insight-a` and `insight-b` on the same Kind cluster do not observe each other's Workflow objects.
@@ -621,7 +621,7 @@ Every merge to `main` of `cyberfabric/insight` **MUST** publish a new umbrella c
 | Kubernetes 1.27+ | Target runtime; declared in the umbrella `kubeVersion`. | p1 |
 | Airbyte chart 1.8.5+ | Data extraction engine; installed as a separate Helm release by every consumer that needs it. | p1 |
 | Argo Workflows chart 0.45.x | Workflow engine for ingestion pipelines. | p1 |
-| GHCR (`oci://ghcr.io/cyberfabric/charts/insight`) | Distribution target for the umbrella chart; written by Chart Publishing CI, read by every consumer. | p1 |
+| GHCR (`oci://ghcr.io/constructorfabric/charts/insight`) | Distribution target for the umbrella chart; written by Chart Publishing CI, read by every consumer. | p1 |
 | Kind 0.22+ / OrbStack (dev only) | Local Kubernetes for the developer inner loop. | p2 |
 | Docker Desktop / containerd with `kind load` support (dev only) | Image ingestion into Kind. | p2 |
 | Bitnami Helm subcharts (MariaDB, Redis) via `bitnamilegacy` | Bundled-infra images still free after Bitnami's 2025 registry change. | p2 |

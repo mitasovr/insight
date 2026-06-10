@@ -10,7 +10,7 @@ images:
     name: source-bitbucket-cloud-insight
     dockerfile: ./Dockerfile
     context: .
-    image: "ghcr.io/cyberfabric/source-bitbucket-cloud-insight:2026.05.22.13.03-5cdda7c"
+    image: "ghcr.io/constructorfabric/source-bitbucket-cloud-insight:2026.05.22.13.03-5cdda7c"
 
 dbt_select: "tag:bitbucket-cloud+"
 

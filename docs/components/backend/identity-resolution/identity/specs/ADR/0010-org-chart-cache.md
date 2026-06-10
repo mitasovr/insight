@@ -25,7 +25,7 @@
 
 ## Context and Problem Statement
 
-cyberfabric/cyber-insight#348 calls for a per-person organisational
+constructorfabric/insight#348 calls for a per-person organisational
 view that returns the parent and direct subordinates for any
 `person_id`, and ultimately a recursive subchart endpoint
 (`GET /v1/subchart/{person_id}?depth=N`). The data lives in `persons`
@@ -396,7 +396,7 @@ historical edges (deactivated and not re-activated).
 
 ## More Information
 
-- cyberfabric/cyber-insight#348 — parent issue (Phase 1, Phase 2,
+- constructorfabric/insight#348 — parent issue (Phase 1, Phase 2,
   Phase 3 scope).
 - ADR-0002 — Read From the MariaDB `persons` Table; pending-
   iresolution policy that this ADR explicitly does not change.
