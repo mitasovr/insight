@@ -9,22 +9,46 @@ spec files under `docs/components/<area>/specs/`.
 
 ---
 
-## TL;DR — first run
+## TL;DR — from scratch to a populated FE
+
+Clone, configure, start the stack, seed the demo dataset:
 
 ```bash
+# 1. Clone both repos side-by-side.
 git clone git@github.com:cyberantonz/insight.git
 git clone git@github.com:cyberantonz/insight-front.git   # sibling dir
 cd insight
 
+# 2. Copy the env template and set your dev-impersonation email
+#    (becomes the development-team lead in the demo roster).
 cp .env.compose.example .env.compose
+sed -i.bak 's|^VITE_DEV_USER_EMAIL=$|VITE_DEV_USER_EMAIL=you@yourorg.com|' .env.compose && rm .env.compose.bak
+
+# 3. Build host artefacts + start every service.
+#    First run: 5–15 minutes (cold Rust compile + first image pulls).
 ./dev-compose.sh up
+
+# 4. Populate the demo dataset (identity persons + 24k silver rows +
+#    gold views). Idempotent; safe to re-run.
+./dev-compose.sh seed all
+
+# 5. Restart the frontend so it picks up the new VITE_DEV_USER_EMAIL.
+docker compose -f docker-compose.yml --profile front-dev up -d insight-front-dev
 ```
 
-Open `http://localhost:3000`. The whole stack — MariaDB, ClickHouse,
-Redis, Redpanda, API gateway, Analytics API, Identity, and the Vite
-frontend with HMR — is now running.
+Open <http://localhost:3000>. The dashboards now have data — `you@yourorg.com`
+is the dev-team lead, the CEO sees the whole tree, every team has
+60 days of activity.
 
-Bring it down with `./dev-compose.sh down`.
+Daily workflow:
+
+```bash
+./dev-compose.sh build api-gateway     # rebuild one Rust service after a code edit
+./dev-compose.sh build all             # rebuild everything
+./dev-compose.sh seed silver           # refresh ClickHouse data only
+./dev-compose.sh down                  # stop everything; data preserved
+./dev-compose.sh down --volumes        # also wipe DB volumes + build/ artefacts
+```
 
 > **First-run timing.** The cold Rust compile is the slow part — count
 > on ~5–15 minutes depending on your machine (it's downloading the
