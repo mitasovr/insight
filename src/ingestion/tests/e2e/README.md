@@ -13,7 +13,7 @@ See specs: [PRD](../../../../docs/domain/bronze-to-api-e2e/specs/PRD.md), [DESIG
 
 ## Prerequisites
 
-Only one: **Docker Engine ≥ 24**. Everything else (Python 3.12, Rust 1.92, dbt-clickhouse, pytest, all deps) lives inside the runner image.
+Only one: **Docker Engine ≥ 24**. Everything else (Python 3.12, Rust matching `rust-version` in `src/backend/Cargo.toml`, dbt-clickhouse, pytest, all deps) lives inside the runner image.
 
 ## Run (recommended — dockerized)
 
