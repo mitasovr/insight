@@ -32,18 +32,19 @@ def test_yaml_parses(workflow: dict) -> None:
     assert "jobs" in workflow
 
 
-def test_required_paths_in_filter(workflow: dict) -> None:
-    """PR-touch path filter MUST cover ingestion, analytics-api, insight-clickhouse lib."""
+def test_runs_on_every_pr(workflow: dict) -> None:
+    """The suite MUST run on every PR — no `paths:` filter. It is meant to be
+    a required status check on main, and a path-filtered required check never
+    reports on PRs outside the filter, leaving them stuck on "Expected"."""
     # PyYAML coerces `on:` (a YAML truthy key) to the boolean True. Accept either.
     on = workflow.get("on") or workflow.get(True)
     assert on, "workflow has no `on:` triggers"
-    pr_paths = set(on.get("pull_request", {}).get("paths", []))
-    for required in (
-        "src/ingestion/**",
-        "src/backend/services/analytics-api/**",
-        "src/backend/libs/insight-clickhouse/**",
-    ):
-        assert required in pr_paths, f"PR path filter missing {required!r}"
+    pr = on.get("pull_request") or {}
+    assert "paths" not in pr and "paths-ignore" not in pr, (
+        "pull_request must not be path-filtered — as a required check it would "
+        "hang on 'Expected' for PRs outside the filter"
+    )
+    assert pr.get("branches") == ["main"]
 
 
 def test_uses_local_runner_image(workflow: dict) -> None:
