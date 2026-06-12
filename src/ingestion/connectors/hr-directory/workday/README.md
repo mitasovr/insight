@@ -58,6 +58,8 @@ Extra columns (custom fields, calculated fields) are allowed: they land in the B
 
 The report MUST define two prompts enabled as web service parameters: `From_Date` and `To_Date` (date range filter on time-off dates). The connector passes `From_Date` from `workday_start_date` and `To_Date` as the current UTC date.
 
+As with the workers report, extra columns are allowed and land in the Bronze `raw_data` column.
+
 ## K8s Secret
 
 ```yaml

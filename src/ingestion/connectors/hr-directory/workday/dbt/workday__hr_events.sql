@@ -26,6 +26,7 @@ FROM {{ source('workday', 'leave_requests') }} lr
 LEFT JOIN {{ source('workday', 'workers') }} w
     ON lr.Employee_ID = w.Employee_ID
     AND lr.tenant_id = w.tenant_id
+    AND lr.source_id = w.source_id
 WHERE lr.Employee_ID IS NOT NULL
   AND parseDateTimeBestEffortOrNull(lr.Start_Date) IS NOT NULL
   AND parseDateTimeBestEffortOrNull(lr.End_Date)   IS NOT NULL

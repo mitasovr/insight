@@ -166,7 +166,7 @@ Defines the complete Workday connector as a YAML declarative manifest — the si
 
 ##### Responsibility scope
 
-Defines 2 streams with: ISU Basic auth, GET requests to config-driven report paths, `format=json` and date-prompt query parameters, `NoPagination`, full refresh sync, `AddFields` for `raw_data` (workers only), `tenant_id`, `source_id`, and `unique_key`, and inline JSON schemas matching the report contract.
+Defines 2 streams with: ISU Basic auth, GET requests to config-driven report paths, `format=json` and date-prompt query parameters, `NoPagination`, full refresh sync, `AddFields` for `raw_data`, `tenant_id`, `source_id`, and `unique_key`, and inline JSON schemas matching the report contract.
 
 ##### Responsibility boundaries
 
@@ -399,6 +399,7 @@ sequenceDiagram
 | `Unit` | String | `hours` / `days` |
 | `Status` | String | Request status (`Approved`, `Submitted`, `Canceled`, …) |
 | `Submitted_Moment` | String | When the request was submitted |
+| `raw_data` | String (JSON) | Full report row incl. extra customer columns — custom-field passthrough |
 | `_airbyte_extracted_at` | DateTime | Extraction timestamp (UTC) — auto-generated |
 
 ---
@@ -411,7 +412,7 @@ sequenceDiagram
 
 - [ ] `p1` - **ID**: `cpt-insightspec-topology-wd-deployment`
 
-```
+```text
 Connection: workday-{source-id}
 ├── Source image: airbyte/source-declarative-manifest
 ├── Manifest: src/ingestion/connectors/hr-directory/workday/connector.yaml

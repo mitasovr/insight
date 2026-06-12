@@ -54,8 +54,9 @@ class MockRaasHandler(BaseHTTPRequestHandler):
         params = parse_qs(parsed.query)
         report = parsed.path.rstrip("/").rsplit("/", 1)[-1]
 
-        if "Authorization" not in self.headers:
-            self._reply(401, {"error": "Authentication required"})
+        auth = self.headers.get("Authorization", "")
+        if not auth.lower().startswith("basic "):
+            self._reply(401, {"error": "Basic authentication required"})
             return
 
         if report not in REPORT_FIXTURES:

@@ -243,6 +243,11 @@ streams:
             type:
               - string
               - "null"
+          raw_data:
+            type:
+              - object
+              - "null"
+            additionalProperties: true
           source_id:
             type:
               - string
@@ -257,6 +262,10 @@ streams:
     transformations:
       - type: AddFields
         fields:
+          - type: AddedFieldDefinition
+            path:
+              - raw_data
+            value: "{{ record }}"
           - type: AddedFieldDefinition
             path:
               - tenant_id
