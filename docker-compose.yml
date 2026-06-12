@@ -185,9 +185,13 @@ services:
       # selects which one; see CONTRIBUTING.md for the OIDC swap.
     volumes:
       # Bind-mount the host-built Linux binary over the baked one. The
-      # ./compose/build/api-gateway path is populated by dev-compose.sh build
-      # (or by the initial `docker compose build` cold start that extracts
-      # the binary out of the image).
+      # ./compose/build/api-gateway path is populated by `./dev-compose.sh up`
+      # (or `./dev-compose.sh build api-gateway`), which runs the
+      # `build-rust` builder service under the `build` profile and writes
+      # the freshly-compiled binary to /out/api-gateway/. A plain
+      # `docker compose build` does NOT create this artefact — it only
+      # builds the runtime image; the bind-mount source has to exist on
+      # the host or compose errors out.
       - ./compose/build/api-gateway/insight-api-gateway:/app/insight-api-gateway:ro
       # Mount the service's config dir so YAML edits don't require a
       # full image rebuild.
