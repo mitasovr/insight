@@ -21,6 +21,43 @@ model and full workflow.
 | `redpanda-console/` | `redpanda/console` | `redpanda-console` | not in baseline |
 | `airbyte/` | `airbyte/airbyte` | `airbyte` | not in baseline (uses embedded Postgres+MinIO); prod overlay needs S3 creds |
 | `argo-workflows/` | `argo/argo-workflows` | `argo-workflows` | not in baseline |
+| `loki/` | `grafana/loki` | `loki` | not in baseline (single-tenant, no auth) |
+| `alloy/` | `grafana/alloy` | `alloy` | not in baseline |
+| `grafana/` | `grafana/grafana` | `grafana` | not in baseline (chart auto-gens admin pw; per-env overlay may seal `grafana-creds`) |
+
+### Observability (loki / alloy / grafana)
+
+These three are the bundled observability stack (LGTM, logs first). Two
+independent decisions, mirroring the managed-vs-bundled choice for the data
+stores above:
+
+1. **Install the bundled stack?** — the `inventory.system.{loki,alloy,grafana}`
+   toggles. On = self-host Loki/Alloy/Grafana in `insight-infra`. Off = don't
+   (the cluster already runs observability, or stdout is enough).
+2. **Where do services export?** — the umbrella's `observability.otlp.endpoint`
+   (`environments/<env>/values.yaml`). Point it at this stack's Alloy when the
+   toggles are on; at your own collector for an external one; leave it empty
+   for stdout-only.
+
+Services ALWAYS log structured JSON to stdout regardless — that is the
+product contract; the endpoint only decides where (if anywhere) Insight also
+exports OTLP.
+
+**Access (follow-up: auth).** The baseline Grafana ships with no ingress and
+no SSO — reach it via port-forward:
+
+```shell
+kubectl -n insight-infra port-forward svc/grafana 3000:80
+# admin password:
+kubectl -n insight-infra get secret grafana -o jsonpath='{.data.admin-password}' | base64 -d
+# Explore → Loki:
+{namespace="insight"}            # service logs
+{component="reconcile-loop"}     # reconcile ticks
+```
+
+Putting Grafana behind auth is a tracked follow-up: seal a `grafana-creds`
+Secret (the optional-secrets helper applies it), then per-env ingress + OIDC
+SSO via the existing `insight-oidc` app.
 
 ## Values layout
 
