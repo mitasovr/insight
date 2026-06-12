@@ -348,6 +348,13 @@ Populate the demo dataset. Stack must be up first.
              ~24k rows of 60-day per-team activity in ClickHouse.
   all        Both (default if no arg).
 
+After `silver` or `all` runs, analytics-api is restarted so its
+metric-catalog schema validator re-checks the freshly-populated tables.
+Without that bounce, every metric stays cached at the boot-time
+`schema_status='error'`, the FE flags every bullet row schema_error=true,
+and section badges read "no peer data" everywhere.
+Tracking upstream as constructorfabric/insight#1307.
+
 See compose/seed/README.md for the ruff/mypy/venv setup.
 EOF
 }
@@ -366,7 +373,25 @@ cmd_seed() {
   local args=("$@")
   [[ ${#args[@]} -eq 0 ]] && args=("all")
 
-  exec "${compose_cmd[@]}" --profile seed run --rm seed-sample "${args[@]}"
+  # Run the seed step itself. NOT `exec` — we still want to bounce
+  # analytics-api after silver/all completes (see cf/insight#1307).
+  "${compose_cmd[@]}" --profile seed run --rm seed-sample "${args[@]}"
+  local seed_status=$?
+  if [[ $seed_status -ne 0 ]]; then
+    return $seed_status
+  fi
+
+  # Restart analytics-api when ClickHouse data was touched. Its schema
+  # validator caches schema_status at startup and never re-checks; without
+  # this nudge the catalog keeps serving the pre-seed 'table_not_found'
+  # verdict and the FE shows "no peer data" everywhere.
+  case "${args[0]}" in
+    silver|all)
+      echo
+      echo "=== restarting analytics-api so it re-validates schema (cf/insight#1307) ==="
+      "${compose_cmd[@]}" restart analytics-api >/dev/null
+      ;;
+  esac
 }
 
 # ──────────────────────────────────────────────────────────────────────
