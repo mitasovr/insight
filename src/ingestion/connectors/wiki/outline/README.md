@@ -93,6 +93,21 @@ Emails are resolved within the connector itself — no cross-connector (`jira_us
 - The user objects embedded in `documents.list` / `revisions.list` / `comments.list` responses (`createdBy`, `updatedBy`) do NOT include the email field on self-hosted instances (verified on a live instance, 2026-06-12). The connector still stamps `author_email` / `last_editor_email` from them onto bronze records in case a deployment does embed emails.
 - The Silver staging models LEFT JOIN `bronze_outline.wiki_users` on the user UUID and take `coalesce(embedded_email, wiki_users.email)`. Identity Manager maps emails to `person_id` in Silver step 2.
 
+### Identity Manager inputs
+
+The user directory also feeds Identity Resolution through the standard macro chain (same as zoom / zulip-proxy / bamboohr / ms-entra):
+
+```
+wiki_users (bronze)
+  -> outline__users_snapshot        (snapshot macro, SCD2 on name/email/role/is_suspended)
+    -> outline__users_fields_history (fields_history macro, field-level change log)
+      -> outline__identity_inputs    (identity_inputs_from_history macro,
+                                      tagged silver:identity_inputs)
+        -> identity.identity_inputs  (shared union via union_by_tag)
+```
+
+Contributed observations: `email`, `display_name` (from `name`), plus the canonical `id` binding row. Suspension (`is_suspended=true`) emits DELETE rows for all identity fields.
+
 ## Limitations
 
 - Deleted (trashed) documents are not enumerated by `documents.list` `statusFilter`; they are only visible until the trash is emptied via the separate `documents.deleted` endpoint (not ingested)

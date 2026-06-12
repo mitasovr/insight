@@ -11,6 +11,28 @@ sources:
       - name: wiki_users
 
 models:
+  - name: outline__users_snapshot
+    description: >
+      SCD2 snapshot of the Outline user directory (wiki_users). Appends a
+      new row when any of `name`, `email`, `role`, `is_suspended` changes
+      for a given user.
+    columns:
+      - name: unique_key
+        tests:
+          - not_null
+
+  - name: outline__users_fields_history
+    description: >
+      Field-level change log derived from the users snapshot. One row per
+      changed field per version transition.
+
+  - name: outline__identity_inputs
+    description: >
+      Identity Manager input rows emitted from the user fields-history.
+      Contributes `email` and `display_name` (from `name`) value types plus
+      the canonical `id` binding row. Deactivation triggered when
+      `is_suspended=true`.
+
   - name: outline__wiki_pages
     description: >
       Bronze → Silver step 1: Outline documents → class_wiki_pages. One row
