@@ -127,11 +127,31 @@ _ISSUE_TYPES = ("Bug", "Task", "Story", "Improvement")
 _PRIORITIES = ("Highest", "High", "Medium", "Medium", "Low")
 _CLOSE_STATUSES = ("Closed", "Resolved", "Verified")
 
+# Per-team data_source for task-tracking rows. Support uses the
+# `zendesk-placeholder` marker — there's no real Zendesk connector in
+# the repo so this keeps the per-team distinction visible without
+# pretending to be Jira. Everyone else lives in Jira.
+_TASK_DATA_SOURCE = {"support": "zendesk-placeholder"}
+_DEFAULT_TASK_DATA_SOURCE = "jira"
+
+
+def _task_data_source(team: str | None) -> str:
+    return _TASK_DATA_SOURCE.get(team or "", _DEFAULT_TASK_DATA_SOURCE)
+
+
+def _value_id_type(field_id: str) -> str:
+    """`assignee` rows carry an account-id; everything else is a literal
+    (status names, issue types, due-date strings, time-in-seconds). The
+    downstream task-current-state MV reads the typing to decide how to
+    resolve the value against class_task_users."""
+    return "account_id" if field_id == "assignee" else "string_literal"
+
 
 def _fh_row(
     *,
     tenant_uuid: str,
     src_id: str,
+    data_source: str,
     issue_id: str,
     event_at: _dt.datetime,
     event_kind: str,
@@ -148,14 +168,14 @@ def _fh_row(
     event_id = deterministic_uuid("task.fh", issue_id, field_id, str(seq))
     return (
         deterministic_uuid("task.fh.uk", issue_id, field_id, str(seq)),
-        src_id, "jira", issue_id,
+        src_id, data_source, issue_id,
         f"INSIGHT-{issue_id[-4:]}",
         event_id, event_at, event_kind, seq,
         author_id, author_id,
         field_id, field_name, "single", "set",
         value_id, value_display,
         value_ids, value_displays,
-        "string_literal", event_at, 1,
+        _value_id_type(field_id), event_at, 1,
     )
 
 
@@ -189,6 +209,7 @@ def seed_task_field_history(
         if weight <= 0:
             continue
         src_id = deterministic_uuid("task.source", p.uuid)
+        data_source = _task_data_source(p.team)
         for created_day in window:
             rng = seeded_rng(p.uuid, created_day, "task.fh")
             mean = 0.6 * persona * weight * weekday_multiplier(created_day)
@@ -217,7 +238,8 @@ def seed_task_field_history(
                 ]
                 for seq, (fid, fname, vid, vdisp) in enumerate(base_fields):
                     rows.append(_fh_row(
-                        tenant_uuid=tenant_uuid, src_id=src_id, issue_id=issue_id,
+                        tenant_uuid=tenant_uuid, src_id=src_id,
+                        data_source=data_source, issue_id=issue_id,
                         event_at=created_at, event_kind="synthetic_initial",
                         field_id=fid, field_name=fname,
                         value_id=vid, value_display=vdisp,
@@ -234,7 +256,8 @@ def seed_task_field_history(
                             close_day, _dt.time(rng.randint(10, 17), rng.randint(0, 59)),
                         )
                         rows.append(_fh_row(
-                            tenant_uuid=tenant_uuid, src_id=src_id, issue_id=issue_id,
+                            tenant_uuid=tenant_uuid, src_id=src_id,
+                            data_source=data_source, issue_id=issue_id,
                             event_at=close_at, event_kind="changelog",
                             field_id="status", field_name="Status",
                             value_id=None, value_display=close_status,
@@ -244,11 +267,23 @@ def seed_task_field_history(
     return bulk_insert(client, "silver", "class_task_field_history", cols, rows)
 
 
+# Refreshable materialized views that derive from class_task_field_history.
+# Listed explicitly so a CH version mismatch errors loudly here rather than
+# leaving downstream metrics stale until the scheduled refresh tick.
+_TASK_REFRESHABLE_MVS = (
+    "insight.task_issue_current_state",
+    "insight.task_status_intervals",
+)
+
+
 def refresh_dependent_mvs(client: clickhouse_connect.driver.client.Client) -> None:
-    """The `task_issue_current_state` view is a REFRESHABLE MV (1h cadence).
-    Trigger an explicit refresh so seeded data flows downstream
-    immediately instead of after the next scheduled tick."""
-    client.command("SYSTEM REFRESH VIEW insight.task_issue_current_state")
+    """Force-refresh every task-pipeline refreshable MV. Default schedule
+    is 1h cadence; without an explicit refresh, freshly-seeded
+    class_task_field_history rows don't surface in
+    insight.jira_closed_tasks / .task_delivery_bullet_rows until the
+    next tick."""
+    for mv in _TASK_REFRESHABLE_MVS:
+        client.command(f"SYSTEM REFRESH VIEW {mv}")
 
 
 def generate(

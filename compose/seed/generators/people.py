@@ -10,13 +10,15 @@ Populates:
   chain from a BambooHR-shaped table. The columns used by the
   view are workEmail, displayName, department, jobTitle, supervisorEmail.
 
+Emails are written lowercased to BOTH tables so case-insensitive joins
+elsewhere don't accidentally split one person into two identities.
+
 Both tables use ReplacingMergeTree so re-inserting the same `_version`
 is safe; we TRUNCATE first anyway for cleanliness.
 """
 
 from __future__ import annotations
 
-import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -82,7 +84,11 @@ def seed_class_people(
 ) -> int:
     truncate(client, "silver", "class_people")
     cols = ["unique_key", "email", "department_name", "_version"]
-    version = int(time.time())
+    # Constant `_version` — every other generator emits version=1 too.
+    # `int(time.time())` would make re-runs emit "newer" rows on every
+    # invocation, defeating the deterministic-reseed contract baked into
+    # generators/base.py (deterministic_uuid + seeded_rng).
+    version = 1
     rows: list[tuple[object, ...]] = []
     for p in roster:
         dept = _TEAM_DEPARTMENT.get(p.team or "", "Executive")
@@ -122,17 +128,21 @@ def seed_bamboohr_employees(
         if sup_email is not None:
             sup = next(q for q in roster if q.email == sup_email)
             sup_name = _display_name(sup)
+        # Lowercase both emails for case-insensitive identity. `silver.
+        # class_people.email` is lowercased too — mismatched casing here
+        # would silently split joins where the analytics-api lower-cases
+        # one side and matches the other verbatim.
         rows.append((
             deterministic_uuid("bamboohr.employee", p.email),
             "Active",
             first or full,
             last or "",
             full,
-            p.email,
+            p.email.lower(),
             _TEAM_DEPARTMENT.get(p.team or "", "Executive"),
             _TEAM_DIVISION.get(p.team or "", "Executive"),
             _job_title(p),
-            sup_email or "",
+            (sup_email or "").lower(),
             sup_name,
         ))
     return bulk_insert(client, "bronze_bamboohr", "employees", cols, rows)
