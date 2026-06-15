@@ -1,6 +1,6 @@
 # DESIGN — Zendesk Connector
 
-> Version 1.0 — May 2026
+> Version 2.0 — June 2026
 > Issue: INSIGHT-459
 > Based on: [PRD.md](./PRD.md), [`zendesk.md`](../zendesk.md), [Connector Framework DESIGN](../../../../domain/connector/specs/DESIGN.md), [Support Domain README](../../README.md)
 
@@ -22,6 +22,7 @@
   - [3.6 Interactions & Sequences](#36-interactions--sequences)
   - [3.7 Database Schemas & Tables](#37-database-schemas--tables)
 - [4. Additional Context](#4-additional-context)
+  - [Audit fan-out hardening (review #1304)](#audit-fan-out-hardening-review-1304)
   - [API Details](#api-details)
   - [Field Mapping to Bronze Schema](#field-mapping-to-bronze-schema)
   - [Collection Strategy](#collection-strategy)
@@ -42,12 +43,16 @@
 
 The Zendesk connector is an Airbyte declarative (nocode) YAML manifest that extracts ticket snapshots, CSAT ratings, and agent directory data from the Zendesk REST API v2. It writes all data to per-source Bronze tables in ClickHouse, following the unified support domain Bronze schema defined in [`zendesk.md`](../zendesk.md).
 
-Phase 1 targets three streams:
+Five streams ship:
 1. `support_tickets` — incremental, via `GET /api/v2/incremental/tickets.json` with `metric_sets` sideload
-2. `support_agents` — full refresh, via `GET /api/v2/users?role[]=agent&role[]=admin`
-3. `zendesk_satisfaction_ratings` — incremental, via `GET /api/v2/satisfaction_ratings`
+2. `support_ticket_ids` — slim key-only parent (incremental, same export endpoint, `ticket_id` + `updated_at` only, no `metadata`) that fans out the audit substream while keeping the CDK parent-record cache tiny
+3. `support_agents` — full refresh, via `GET /api/v2/users?role[]=agent&role[]=admin`
+4. `zendesk_satisfaction_ratings` — incremental, via `GET /api/v2/satisfaction_ratings`
+5. `support_ticket_events` — per-ticket Ticket Audits, via `GET /api/v2/tickets/{id}/audits` behind a `SubstreamPartitionRouter` over `support_ticket_ids`
 
-Phase 2 adds `support_ticket_events` (per-ticket audit log) and `zendesk_ticket_ext` (custom fields). Both schemas are locked in `zendesk.md` and the Bronze DDL but not implemented in the connector manifest until Phase 2.
+Silver (`zendesk__support_event`, `class_support_activity`, shared dims) and Gold (`support_bullet_rows` → `support_person_period` → `support_company_stats`) are delivered.
+
+`support_ticket_events` is SHIPPED; `zendesk_ticket_ext` (custom fields) remains Phase 2 — its schema is locked in `zendesk.md` and the Bronze DDL but not implemented in the connector manifest until Phase 2.
 
 The declarative approach is consistent with all other connectors in the project. Authentication is via HTTP Basic Auth (`{email}/token:{api_token}` Base64-encoded). The manifest version is pinned to `7.0.4` to match the current platform CDK.
 
@@ -77,7 +82,7 @@ Every emitted record includes `insight_tenant_id`, `insight_source_id`, `unique_
 | NFR ID | Design Response | Verification |
 |--------|-----------------|-------------|
 | `cpt-zendeskspec-nfr-freshness` | Declarative manifest + daily cron schedule | Monitor `support_collection_runs.completed_at` |
-| `cpt-zendeskspec-nfr-rate-limits` | Declarative `BackoffStrategy` on `RequestOption`; `Retry-After` header respected by CDK default error handler | Zero unhandled HTTP 429 in production |
+| `cpt-zendeskspec-nfr-rate-limits` | Explicit RATE_LIMITED error_handler (429/503 + `Retry-After`) on the `support_ticket_events` audits substream (the most rate-limit-prone stream); other streams rely on the CDK default error handler / `Retry-After` | Zero unhandled HTTP 429 in production |
 | `cpt-zendeskspec-nfr-utc` | Zendesk API returns ISO 8601 UTC timestamps; stored as-is in Bronze | Schema test: zero non-UTC timestamps |
 | `cpt-zendeskspec-nfr-declarative` | YAML manifest; `validate-strict` in CI | Pipeline gate |
 
@@ -95,29 +100,44 @@ Every emitted record includes `insight_tenant_id`, `insight_source_id`, `unique_
 │  │   └── incremental: GET /api/v2/incremental/tickets.json          │
 │  │       ?start_time={unix_ts}&include=metric_sets                   │
 │  │       cursor: updated_at (DatetimeBasedCursor)                    │
+│  ├── support_ticket_ids stream (slim key-only parent)               │
+│  │   └── incremental: GET /api/v2/incremental/tickets.json          │
+│  │       emits ticket_id + updated_at only (no metadata)            │
 │  ├── support_agents stream                                           │
 │  │   └── full refresh: GET /api/v2/users?role[]=agent&role[]=admin   │
 │  │       group names: GET /api/v2/groups (Phase 2)                   │
-│  └── zendesk_satisfaction_ratings stream                             │
-│      └── incremental: GET /api/v2/satisfaction_ratings               │
-│          ?start_time={unix_ts}&sort_by=updated_at                    │
-│          cursor: updated_at (DatetimeBasedCursor)                    │
+│  ├── zendesk_satisfaction_ratings stream                            │
+│  │   └── incremental: GET /api/v2/satisfaction_ratings               │
+│  │       ?start_time={unix_ts}&sort_by=updated_at                    │
+│  │       cursor: updated_at (DatetimeBasedCursor)                    │
+│  └── support_ticket_events stream                                   │
+│      └── SubstreamPartitionRouter over support_ticket_ids           │
+│          GET /api/v2/tickets/{id}/audits (incremental_dependency)    │
 └─────────────────────────────┬───────────────────────────────────────┘
                               │ Airbyte Protocol (RECORD, STATE, LOG)
 ┌─────────────────────────────▼───────────────────────────────────────┐
 │  Bronze Tables (ClickHouse — ReplacingMergeTree)                     │
-│  support_tickets, support_agents,                                    │
-│  zendesk_satisfaction_ratings, support_collection_runs               │
+│  support_tickets, support_ticket_ids, support_agents,               │
+│  zendesk_satisfaction_ratings, support_ticket_events                 │
+│  (support_collection_runs — DE-SCOPED, not emitted)                 │
+└─────────────────────────────┬───────────────────────────────────────┘
+                              │ dbt (tag:zendesk+)
+┌─────────────────────────────▼───────────────────────────────────────┐
+│  Silver: zendesk__support_event, class_support_activity,            │
+│          dim_support_agent, dim_support_ticket                       │
+│  Gold:   support_bullet_rows → support_person_period →              │
+│          support_company_stats                                       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 | Layer | Responsibility | Technology |
 |-------|---------------|------------|
 | Orchestration | Trigger, schedule, state management, dbt run | Argo CronWorkflow (`zendesk-default-sync`) |
-| Collection | REST pagination, cursor management, retry, field injection | Airbyte DeclarativeSource (YAML manifest) |
+| Collection | REST pagination, cursor management, retry, field injection, audit substream fan-out | Airbyte DeclarativeSource (YAML manifest) |
 | Transformation | `AddFields` for tenant/source/key injection; timing field extraction | Declarative transformations + `CustomTransformation` |
 | Storage | Upsert to Bronze tables | ClickHouse `ReplacingMergeTree(_version)` |
-| Silver | `class_support_activity` derivation, identity resolution | dbt models (`tag:zendesk+`) |
+| Silver | `zendesk__support_event` (audit explosion + actor-classification), `class_support_activity` rollup, shared dims, identity resolution | dbt models (`tag:zendesk+`) — **delivered** |
+| Gold | `support_bullet_rows` → `support_person_period` → `support_company_stats` (CH views) | migration `20260611000000_support-bullet-rows.sql` — **delivered** |
 
 ---
 
@@ -210,8 +230,11 @@ connector.yaml (Airbyte DeclarativeSource)
 ├── check           — CheckStream on support_agents (cheapest endpoint)
 ├── streams
 │   ├── support_tickets              — incremental, DatetimeBasedCursor
+│   ├── support_ticket_ids           — incremental, slim key-only audit parent (no metadata)
 │   ├── support_agents               — full refresh
-│   └── zendesk_satisfaction_ratings — incremental, DatetimeBasedCursor
+│   ├── zendesk_satisfaction_ratings — incremental, DatetimeBasedCursor
+│   └── support_ticket_events        — SubstreamPartitionRouter over support_ticket_ids
+│                                       (incremental_dependency; one row per audit)
 └── metadata        — autoImportSchema flags per stream
 ```
 
@@ -415,9 +438,62 @@ ALTER TABLE bronze_zendesk.zendesk_satisfaction_ratings
     ADD INDEX idx_zendesk_rating_assignee (assignee_id, data_source) TYPE set(0) GRANULARITY 4;
 ```
 
+#### ClickHouse DDL: `support_ticket_ids`
+
+Slim key-only parent for the audit substream — emits `ticket_id` + `updated_at` only (no `metadata`).
+
+```sql
+CREATE TABLE IF NOT EXISTS bronze_zendesk.support_ticket_ids
+(
+    ticket_id          String,
+    updated_at         DateTime64(3),
+    collected_at       DateTime64(3),
+    data_source        String DEFAULT 'insight_zendesk',
+    tenant_id          String,
+    source_id          String,
+    unique_key         String
+)
+ENGINE = ReplacingMergeTree
+ORDER BY unique_key
+SETTINGS index_granularity = 8192;
+```
+
+#### ClickHouse DDL: `support_ticket_events`
+
+One row per AUDIT; the raw `events[]` array is stored as a JSON string. Per-event explosion + actor-classification happen in Silver (`zendesk__support_event`).
+
+```sql
+CREATE TABLE IF NOT EXISTS bronze_zendesk.support_ticket_events
+(
+    tenant_id          String,
+    source_id          String,
+    unique_key         String,            -- = audit id
+    collected_at       DateTime64(3),
+    data_source        String DEFAULT 'insight_zendesk',
+    audit_id           String,
+    ticket_id          String,
+    author_id          Nullable(String),  -- audit.author_id; NULL for system events
+    created_at         DateTime64(3),      -- audit.created_at
+    events             String              -- audit.events[] as a JSON string
+)
+ENGINE = ReplacingMergeTree
+ORDER BY unique_key
+SETTINGS index_granularity = 8192;
+```
+
 ---
 
 ## 4. Additional Context
+
+### Audit fan-out hardening (review #1304)
+
+The `support_ticket_events` audit substream fans out one `GET /api/v2/tickets/{id}/audits` call per ticket. Several hardening measures protect it against the failure modes seen in the jira/confluence connectors:
+
+- **Slim key-only parent (`support_ticket_ids`)**: the substream's `SubstreamPartitionRouter` reads from `support_ticket_ids` (which emits only `ticket_id` + `updated_at`, no `metadata`) rather than the full `support_tickets` stream. This keeps the CDK parent-record cache tiny and avoids the parent-cache bloat that caused the jira/confluence silent-hang.
+- **`incremental_dependency: true`**: the substream re-fetches audits only for tickets present in the parent's current incremental window, so the cursor on the parent governs audit refresh.
+- **`concurrency_level.default_concurrency: 4`** at the top level — the audit fan-out must run concurrently; this honours jira's documented "must be ≥ 2" rule to avoid a deadlocked single-partition scheduler.
+- **error_handler**: IGNORE on HTTP 404 (deleted tickets still surface in the incremental export, but their audits 404), and RATE_LIMITED on HTTP 429 / 503 with `Retry-After` backoff.
+- **`lookback_window: P1D`** on the incremental cursors (`support_tickets`, `support_ticket_ids`, `zendesk_satisfaction_ratings`) — boundary-skip protection against records landing exactly on the cursor edge (cf. jira #1316).
 
 ### API Details
 
@@ -530,18 +606,20 @@ Bronze: support_agents.email
 
 ### Phase 2 Design Notes
 
-#### `support_ticket_events` Collection Strategy
+#### `support_ticket_events` Collection Strategy — IMPLEMENTED
 
-Phase 2 adds the audit log stream. Key design decisions already resolved:
+The audit log stream is shipped. Key design decisions, as implemented:
 
 1. **Per-ticket API calls**: `GET /api/v2/tickets/{id}/audits` — one call per ticket. For 500K tickets at 700 req/min, first run takes ~12 hours. Mitigated by:
    - Configurable `start_date` limits the set of tickets whose audits are fetched
-   - `backfill_mode: full` is operator opt-in; default fetches audits for tickets updated in the current incremental window only
-   - Airbyte `SubstreamPartitionRouter` handles the per-ticket fan-out pattern
+   - The audit substream fans out only over tickets in the parent's current incremental window (`incremental_dependency: true`)
+   - Airbyte `SubstreamPartitionRouter` over the slim key-only parent `support_ticket_ids` handles the per-ticket fan-out pattern (see "Audit fan-out hardening")
 
-2. **Deduplication key**: `{audit.id}_{event_index}` — composite because Zendesk audit IDs are unique per audit but not per event within the audit.
+2. **Deduplication keys**:
+   - Bronze `support_ticket_events.unique_key` = the **audit id** (one row per audit; the raw `events[]` array is stored as a JSON string).
+   - Silver per-event key (`zendesk__support_event`, after the ARRAY JOIN explosion) = `zendesk-{audit_id}-{event.id}` — composite because Zendesk audit IDs are unique per audit but not per event within the audit.
 
-3. **Cursor**: no direct cursor on audits. The parent `support_tickets` incremental cursor controls which tickets have their audits refreshed — audits are re-fetched for all tickets in the current incremental window.
+3. **Cursor**: no direct cursor on audits. The parent `support_ticket_ids` incremental cursor controls which tickets have their audits refreshed — audits are re-fetched for all tickets in the current incremental window.
 
 #### `zendesk_ticket_ext` Collection Strategy
 
@@ -597,10 +675,11 @@ Estimated API calls per run (steady state, daily incremental):
 - `zendesk_satisfaction_ratings`: ~500 calls (500 pages × 100/page, assuming ~50K ratings)
 - Still well within the 700 req/min limit for Business plan accounts
 
-**Phase 2 first-run budget** (`support_ticket_events`, 50K tickets, no lookback limit):
+**Audit-stream first-run budget** (`support_ticket_events`, shipped; 50K tickets, no lookback limit):
 - 50,000 calls for audit fetches alone
 - At 700 req/min: ~71 minutes minimum
 - Mitigated by default 90-day lookback (~5K–10K tickets for typical active accounts)
+- The explicit RATE_LIMITED error_handler (429/503 + `Retry-After`) lives on this substream — it is the most rate-limit-prone stream because of the per-ticket fan-out; the other streams use the CDK defaults.
 
 ---
 

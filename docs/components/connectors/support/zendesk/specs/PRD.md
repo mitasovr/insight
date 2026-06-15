@@ -1,8 +1,8 @@
 # PRD — Zendesk Connector
 
-> Version 1.0 — May 2026
+> Version 2.0 — June 2026
 > Issue: INSIGHT-459
-> Status: Phase 1 scope locked
+> Status: Phase 1 + Phase 2 audit stream + Silver/Gold delivered
 
 <!-- toc -->
 
@@ -91,8 +91,8 @@ The Zendesk connector closes this gap by ingesting support activity into the sam
 - Extract satisfaction ratings as a separate stream preserving full rating history
 - Extract agent directory for identity resolution via `email` → `person_id`
 - Incremental extraction using `updated_at` timestamp as cursor for tickets and ratings
-- Support both API token (preferred) and OAuth 2.0 authentication
-- Monitoring via `support_collection_runs` stream
+- API token is the implemented auth method; OAuth 2.0 is spec-supported but not implemented
+- Monitoring via Airbyte platform job stats / sync logs (`support_collection_runs` de-scoped)
 
 ### 1.4 Glossary
 
@@ -177,18 +177,18 @@ The Zendesk connector closes this gap by ingesting support activity into the sam
 - Incremental ticket extraction using Zendesk's bulk export endpoint (`GET /api/v2/incremental/tickets.json`)
 - Extraction of satisfaction ratings as a separate incremental stream (`zendesk_satisfaction_ratings`)
 - Extraction of the agent directory (agents and admins) for identity resolution
-- Connector execution monitoring via `support_collection_runs` stream
+- Extraction of per-ticket Ticket Audits (`support_ticket_events`) from `GET /api/v2/tickets/{id}/audits`, driving actor-attributed activity (updates, public/private comments, solved-ticket counts)
+- The slim key-only parent stream (`support_ticket_ids`) that fans the audit substream out (`ticket_id` + `updated_at` only) to keep the CDK parent-record cache small
+- Silver `class_support_activity` person×date rollup + shared dims + Gold support metrics (`support_bullet_rows` / `support_person_period` / `support_company_stats`) + analytics-api Support metric sets + a frontend "Support" dashboard section
 - K8s Secret-based credential management following the Insight connector secret format
 - Bronze-layer table schemas for all Phase 1 streams
 
 ### 4.2 Out of Scope (Phase 1 — deferred to Phase 2)
 
-- `support_ticket_events`: per-event audit log from `GET /api/v2/tickets/{id}/audits` — one call per ticket, expensive; required for MTTR and SLA compliance metrics
 - `zendesk_ticket_ext`: custom field key-value pairs — ticket `custom_fields[]` extraction and field metadata from `GET /api/v2/ticket_fields`
-- Silver/Gold layer transformations (`class_support_activity`) — responsibility of the support domain pipeline
-- Silver step 2 (identity resolution: `email` → `person_id`) — responsibility of the Identity Manager
 - Backfilling `support_tickets.satisfaction_score` from `zendesk_satisfaction_ratings` — Silver layer responsibility in Phase 2
 - `group_name` resolution on `support_agents` via `GET /api/v2/groups` — `group_name` is NULL in Phase 1 (FR `cpt-zendeskspec-fr-group-name-resolution` is `p2`)
+- `support_collection_runs`: DE-SCOPED (not deferred) — a declarative manifest cannot emit a connector-generated run-log stream; run monitoring is via Airbyte platform job stats / sync logs
 
 ### 4.3 Permanently Out of Scope
 
@@ -281,6 +281,8 @@ The connector **MUST** extract CSAT ratings from `GET /api/v2/satisfaction_ratin
 #### Track Collection Runs
 
 - [ ] `p2` - **ID**: `cpt-zendeskspec-fr-collection-runs`
+
+> **Status (v2.0): DE-SCOPED.** A declarative (nocode) Airbyte manifest cannot write a connector-generated run-log stream. Run monitoring is delegated to the Airbyte platform job stats / sync logs instead. This FR is retained for traceability but is not implemented.
 
 The connector **MUST** write a row to `support_collection_runs` at the start and end of each execution, recording: run ID (UUID), start timestamp, end timestamp, status (`running` / `completed` / `failed`), per-stream record counts, total API call count, error count, and collection settings as JSON.
 
@@ -483,7 +485,7 @@ The Zendesk connector does not expose a public library interface. It is consumed
 | Rate limit handling | Connector does not abort on HTTP 429; retries after `Retry-After` |
 | UTC timestamps | All `created_at`, `updated_at` fields are UTC-normalised |
 | `unique_key` is unique | Zero duplicate `unique_key` values per stream per tenant |
-| Collection run logged | `support_collection_runs` has one row per sync with correct counts |
+| Audit fan-out runs without silent hang | slim key-only parent + `concurrency_level` ≥ 2 + `incremental_dependency`; live-verified |
 
 ---
 

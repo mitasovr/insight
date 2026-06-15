@@ -1,9 +1,10 @@
 # Zendesk Connector Specification
 
-> Version 1.1 — May 2026
-> Previous: v1.0 March 2026
+> Version 2.0 — June 2026
+> Previous: v1.1 May 2026
 > Based on: `docs/connectors/support/README.md` (Support domain schema)
 > Decisions: INSIGHT-459 Phase 1 scope locked; see Resolved Questions.
+> Phase 2 (Ticket Audits `support_ticket_events`) + Silver (`class_support_activity`) + Gold (`support_bullet_rows`) are now SHIPPED (INSIGHT-459). `support_collection_runs` de-scoped (declarative manifests cannot emit a connector-generated stream — monitoring via Airbyte platform job stats).
 
 Standalone specification for the Zendesk (Support / Helpdesk) connector.
 
@@ -16,7 +17,7 @@ Standalone specification for the Zendesk (Support / Helpdesk) connector.
   - [`support_agents` — Agent directory](#supportagents-agent-directory)
   - [`zendesk_satisfaction_ratings` — CSAT ratings (separate stream)](#zendesk_satisfaction_ratings--csat-ratings-separate-stream)
   - [`support_collection_runs` — Connector execution log](#supportcollectionruns-connector-execution-log)
-  - [Phase 2: `support_ticket_events` — Append-only audit log](#phase-2-supportticketevents--append-only-audit-log)
+  - [`support_ticket_events` — Ticket Audit log (SHIPPED)](#supportticketevents--ticket-audit-log-shipped)
   - [Phase 2: `zendesk_ticket_ext` — Custom ticket fields](#phase-2-zendesk_ticket_ext--custom-ticket-fields)
 - [Identity Resolution](#identity-resolution)
 - [Silver / Gold Mappings](#silver-gold-mappings)
@@ -45,9 +46,9 @@ Standalone specification for the Zendesk (Support / Helpdesk) connector.
 
 **`insight_source_id`**: set to the Zendesk subdomain slug, e.g. `zendesk-acme`. Required to disambiguate multiple Zendesk tenants in the same Bronze store.
 
-**Design principle**: `support_tickets` stores the current ticket state. `zendesk_satisfaction_ratings` captures CSAT ratings as an append-only separate stream. `support_ticket_events` (per-event audit log from `/api/v2/tickets/{id}/audits`) is Phase 2 — it requires one API call per ticket and is the most expensive stream to collect. This pattern mirrors the task-tracking domain (`task_tracker_issues` + `task_tracker_history`).
+**Design principle**: `support_tickets` stores the current ticket state. `zendesk_satisfaction_ratings` captures CSAT ratings as an append-only separate stream. `support_ticket_events` (per-ticket audit log from `/api/v2/tickets/{id}/audits`) is SHIPPED — collected per-ticket via the Ticket Audits API behind a slim key-only parent stream (`support_ticket_ids`) so the substream cache stays small. This pattern mirrors the task-tracking domain (`task_tracker_issues` + `task_tracker_history`).
 
-**Incremental export**: Zendesk provides `GET /api/v2/incremental/tickets.json?start_time={unix_ts}` for efficient bulk export. Use this endpoint for scheduled collection runs — the cursor advances only when the full page is consumed. Full ticket audits must be fetched individually via `/api/v2/tickets/{id}/audits` (no bulk audit export) — deferred to Phase 2.
+**Incremental export**: Zendesk provides `GET /api/v2/incremental/tickets.json?start_time={unix_ts}` for efficient bulk export. Use this endpoint for scheduled collection runs — the cursor advances only when the full page is consumed. Full ticket audits are fetched individually via `/api/v2/tickets/{id}/audits` (no bulk audit export); this is SHIPPED — collected per-ticket via the Ticket Audits API behind a slim key-only parent stream (`support_ticket_ids`) so the substream cache stays small.
 
 ---
 
@@ -56,15 +57,16 @@ Standalone specification for the Zendesk (Support / Helpdesk) connector.
 | Stream / Table | Phase | API Source | Sync Mode | Notes |
 |----------------|-------|-----------|-----------|-------|
 | `support_tickets` | **Phase 1** | `GET /api/v2/incremental/tickets.json` | Incremental (`updated_at`) | Core snapshot; includes both business- and calendar-hours timing |
+| `support_ticket_ids` | **Phase 1** | `GET /api/v2/incremental/tickets.json` | Incremental (`updated_at`) | Slim key-only parent for the audit substream (`ticket_id` + `updated_at` only, no `metadata`); keeps the CDK parent-record cache tiny |
 | `support_agents` | **Phase 1** | `GET /api/v2/users?role[]=agent&role[]=admin` | Full refresh | Identity anchor |
 | `zendesk_satisfaction_ratings` | **Phase 1** | `GET /api/v2/satisfaction_ratings` | Incremental (`updated_at`) | Separate stream; not backfilled onto `support_tickets` |
-| `support_collection_runs` | **Phase 1** | Connector-generated | — | Monitoring; written at start and end of run |
-| `support_ticket_events` | **Phase 2** | `GET /api/v2/tickets/{id}/audits` | Append-only per ticket | Expensive: one call per ticket; required for MTTR, SLA |
+| `support_ticket_events` | **Phase 1 (shipped)** | `GET /api/v2/tickets/{id}/audits` | Append-only per ticket | Per-ticket audits behind the slim `support_ticket_ids` parent; one row per audit with raw `events[]` JSON; explosion + classification in Silver |
+| `support_collection_runs` | **DE-SCOPED — platform job stats** | Connector-generated | — | Not implemented; a declarative manifest cannot emit a connector-generated stream — monitoring is via Airbyte platform job stats / sync logs |
 | `zendesk_ticket_ext` | **Phase 2** | `ticket.custom_fields[]` | Incremental (with tickets) | Custom field key-value pairs for workspace-specific fields |
 
-**Phase 1 analytics**: ticket volume trends, agent roster and identity resolution, CSAT score distribution, basic assignee/group breakdowns.
+**Phase 1 analytics**: ticket volume trends, agent roster and identity resolution, CSAT score distribution, basic assignee/group breakdowns, and audit-derived activity (updates, public/private comments, solved-ticket counts) attributed to the acting agent.
 
-**Phase 2 analytics**: MTTR, first-response SLA compliance, full-resolution SLA compliance, per-event audit trail, per-agent CSAT, custom attribute segmentation.
+**Phase 2 analytics**: custom attribute segmentation via `zendesk_ticket_ext`.
 
 ---
 
@@ -176,6 +178,8 @@ Dedicated stream for customer satisfaction ratings. Stored separately rather tha
 
 ### `support_collection_runs` — Connector execution log
 
+> **Status**: DE-SCOPED — not implemented. A declarative manifest cannot emit a connector-generated stream; run monitoring is via Airbyte platform job stats / sync logs. The schema below is retained for reference only.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `run_id` | String | Unique run identifier (UUID) |
@@ -195,33 +199,32 @@ Monitoring table — not an analytics source.
 
 ---
 
-### Phase 2: `support_ticket_events` — Append-only audit log
+### `support_ticket_events` — Ticket Audit log (SHIPPED)
 
-> **Status**: deferred to Phase 2. Schema locked in this spec; implementation pending.
+> **Status**: SHIPPED. Collected per-ticket via the Ticket Audits API behind the slim `support_ticket_ids` parent stream.
 
-Every audit on every ticket is collected from `GET /api/v2/tickets/{id}/audits`. Each Zendesk audit contains an `events[]` array — each entry in the array produces one row in `support_ticket_events`. This is the source of truth for MTTR, SLA compliance, and first-response time verification.
+Every audit on every ticket is collected from `GET /api/v2/tickets/{id}/audits` via a `SubstreamPartitionRouter` over the slim `support_ticket_ids` parent (`incremental_dependency: true`). This is the source of truth for audit-derived activity (updates, comments, solved-ticket counts).
 
-**Why deferred**: requires one API call per ticket — expensive for large accounts. Phase 1 analytics (ticket volume, agent roster, CSAT) do not require per-event data. Phase 2 unlocks MTTR, first-response SLA compliance, and full audit trail.
+**Bronze shape**: lands **one row per AUDIT** with the raw `events[]` array stored as a JSON string. The per-event explosion and classification happen in **Silver**, not Bronze.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `insight_source_id` | String | Connector instance identifier |
+| `tenant_id` | String | Tenant identifier |
+| `source_id` | String | Connector instance identifier |
+| `unique_key` | String | Deduplication key = audit id |
+| `collected_at` | DateTime64(3) | Collection timestamp |
+| `data_source` | String | `"insight_zendesk"` |
+| `audit_id` | String | Zendesk `audit.id` (numeric, stored as string) |
 | `ticket_id` | String | Zendesk ticket `id` — joins to `support_tickets.ticket_id` |
-| `event_id` | String | Composite key: `{audit.id}_{event_index}` — unique per row |
-| `event_type` | String | Normalised event type (see mapping below) |
 | `author_id` | String | `audit.author_id` — Zendesk user ID; NULL for system events — joins to `support_agents.agent_id` |
 | `created_at` | DateTime64(3) | `audit.created_at` — when this audit was recorded |
-| `field_name` | String | For `field_change` / `status_change` / `assignment`: the field that changed; NULL for `comment` events |
-| `value_from` | String | Previous field value; NULL for new tickets or non-field events |
-| `value_to` | String | New field value |
-| `comment_body` | String | Comment text (plain text extracted from HTML); NULL for non-comment events |
-| `is_public` | Int64 | 1 if public reply; 0 if internal note; NULL for non-comment events |
-| `data_source` | String | `"insight_zendesk"` |
-| `_version` | UInt64 | Collection timestamp in milliseconds |
+| `events` | String | The audit's `events[]` array, stored as a JSON string |
 
-**Zendesk `event_type` mapping**:
+**Note**: Bronze stores the raw audit + events JSON; the per-event explosion and actor-classification happen in Silver (`zendesk__support_event`): Comment+public→`public_comment`, Comment+private→`private_comment`, Change status=solved→`solved`, other Change→`update`. Attribution is on the ACTOR (`audit.author_id`→agent); end-user/system authors drop.
 
-| Zendesk audit event type | Unified `event_type` | Notes |
+**Superseded — the old normalized event_type mapping below is no longer the Bronze shape.** The Silver classification taxonomy is `public_comment` / `private_comment` / `solved` / `update`.
+
+| Zendesk audit event type | Superseded `event_type` | Notes |
 |--------------------------|---------------------|-------|
 | `ChangeEvent` with `field_name = "status"` | `status_change` | `value_from` / `value_to` = raw status strings |
 | `ChangeEvent` with `field_name = "assignee_id"` | `assignment` | `value_from` / `value_to` = numeric agent IDs as strings |
@@ -292,36 +295,38 @@ zendesk_satisfaction_ratings.assignee_id     (Phase 1)
 | `support_tickets` | Reference — ticket context | Volume, status, priority breakdowns; ticket counts per group/assignee |
 | `zendesk_satisfaction_ratings` | `class_support_activity` (CSAT fields only) | Ratings attributed to agent via `assignee_id` → `person_id`; `satisfaction_score` = fraction `good / (good + bad)` per agent per period |
 
-### Phase 2 (when `support_ticket_events` is collected)
+### Audit-derived activity (`support_ticket_events`, shipped)
 
 | Bronze table | Silver target | Notes |
 |-------------|--------------|-------|
-| `support_tickets` + `support_ticket_events` | `class_support_activity` | Full per-agent per-day metrics with resolved `person_id` |
-| `support_tickets` | Reference — ticket context | Enriches `class_support_activity` with `ticket_type`, `priority`, `satisfaction_score` (backfilled from ratings) |
+| `support_ticket_events` | `zendesk__support_event` → `class_support_activity` | Audit `events[]` exploded (ARRAY JOIN) into one row per event, classified by ACTOR (`audit.author_id` → agent INNER JOIN; end-user/system authors drop) |
+| `support_tickets` | `silver.dim_support_ticket` — ticket context | Ticket context dimension; NOT used for attribution |
+| `zendesk_satisfaction_ratings` | `class_support_activity` (CSAT fields) | CSAT is assignee-attributed (the one exception to actor-attribution) |
 
-**`class_support_activity`** fields derivable from Zendesk (Phase 2):
+**Attribution principle**: activity is attributed to the ACTOR (who did it), never the assignee — **except CSAT**, which is assignee-attributed because Zendesk binds the rating to the assignee.
+
+**`class_support_activity`** is a person×date rollup (`zendesk__support_activity` staging → shared `silver.class_support_activity`). Shipped fields:
 
 | Field | Derived from |
 |-------|-------------|
-| `person_id` | `support_ticket_events.author_id` → `support_agents.email` → Identity Manager |
-| `date` | `support_ticket_events.created_at` (date part) |
-| `tickets_resolved` | Count of `status_change` events with `value_to = "solved"` per agent per date |
-| `first_response_time_seconds` | Average of `support_tickets.first_reply_time_seconds` for tickets where agent sent first `comment` (`is_public = 1`) on this date |
-| `full_resolution_time_seconds` | Average of `support_tickets.full_resolution_time_seconds` for tickets resolved by agent on this date |
-| `satisfaction_score` | Average CSAT fraction (`good` / total rated) for tickets resolved by agent on this date — sourced from `zendesk_satisfaction_ratings` |
-| `comments_sent` | Count of `comment` events with `is_public = 1` by agent on this date |
+| `updates` | Count of `update` events (other Change) by actor per date |
+| `public_comments` | Count of `public_comment` events (Comment + public) by actor per date |
+| `private_comments` | Count of `private_comment` events (Comment + private) by actor per date |
+| `solved` | DISTINCT tickets solved per actor per day (`uniqExactIf` over `source_ticket_id`) — NOT solve-event count |
+| `csat_good` | CSAT `good` ratings, **assignee-attributed** (good/bad only; `offered` excluded) |
+| `csat_total` | CSAT `good` + `bad` ratings, **assignee-attributed** |
+| `kb_articles_created` | Honest-NULL — no Guide/Help-Center stream exists |
 
-**Gold metrics (Phase 1)**:
-- **Ticket volume trends**: inflow (new tickets created), resolution rate, backlog (open tickets without `solved_at`)
-- **CSAT distribution**: fraction of `good` / `bad` / `offered` ratings per group or period from `zendesk_satisfaction_ratings`
-- **Agent workload (partial)**: ticket counts per agent from `support_tickets.assignee_id` — no per-event resolution yet
+Event classification (in `zendesk__support_event`): Comment+public→`public_comment`; Comment+private→`private_comment`; Change `field_name=status` value=`solved`→`solved`; any other Change→`update`. `metric_date` = `toDate(audit.created_at)` in UTC.
 
-**Gold metrics (Phase 2)**:
-- **MTTR**: average `full_resolution_time_seconds` per agent / group / period
-- **First-response SLA compliance**: fraction of tickets where `first_reply_time_seconds` ≤ SLA threshold
-- **Full-resolution SLA compliance**: fraction of tickets where `full_resolution_time_seconds` ≤ SLA threshold
-- **Agent workload**: `tickets_resolved` + `comments_sent` per agent per week
-- **CSAT per-agent trend**: average `satisfaction_score` per agent over rolling 30 days
+**Gold metrics (shipped)**: CH views in migration `20260611000000_support-bullet-rows.sql`:
+- `support_bullet_rows` (person×date×metric_key) → `support_person_period` → `support_company_stats`.
+- 7 metric keys: `support_active`, `support_updates`, `support_public_comments`, `support_private_comments`, `support_solved`, `support_csat_good`, `support_csat_total`. (`support_kb` intentionally not emitted — ComingSoon via catalog.)
+- `support_active` = 1 only when actor activity that day (`updates + public_comments + private_comments + solved > 0`); a CSAT-only day does NOT count as active. Rolls up via max (person) / sum→count-of-active-members (company).
+- `support_solved` = distinct tickets (label "Solved tickets").
+- CSAT % = Σgood / Σtotal, computed in the analytics-api `query_ref`.
+
+**Downstream (shipped)**: analytics-api Support metric sets (Team/IC) + `metric_catalog` + thresholds; a frontend "Support" dashboard section. Also: ticket-volume / CSAT-distribution analytics from `support_tickets` + `zendesk_satisfaction_ratings`.
 
 ---
 
@@ -332,6 +337,8 @@ zendesk_satisfaction_ratings.assignee_id     (Phase 1)
 **Decision**: Phase 1 collects `support_tickets`, `support_agents`, and `zendesk_satisfaction_ratings`. `support_ticket_events` (audit log) and `zendesk_ticket_ext` (custom fields) are deferred to Phase 2.
 
 **Rationale**: The audit log endpoint (`GET /api/v2/tickets/{id}/audits`) requires one call per ticket — prohibitively expensive for large accounts on first run. Phase 1 analytics (volume, CSAT, roster) do not require per-event data. The spec locks Phase 2 schemas to ensure no breaking schema changes when the streams are added.
+
+**Update (v2.0):** Phase 2 `support_ticket_events` is now shipped — the audit stream + Silver activity rollup (`class_support_activity`) + Gold (`support_bullet_rows`) are delivered. `zendesk_ticket_ext` remains deferred.
 
 ### RQ-ZD-2: `satisfaction_score` — stored as a separate stream
 
