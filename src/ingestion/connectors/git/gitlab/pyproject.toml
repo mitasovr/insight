@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "source-gitlab-insight"
+version = "0.1.0"
+description = "Airbyte source connector for self-hosted GitLab (CDK, typed)"
+requires-python = ">=3.10"
+dependencies = [
+    "airbyte-cdk>=7.21.1",
+    "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10",
+    "ruff>=0.5",
+    "types-requests",
+]
+
+[project.scripts]
+source-gitlab-insight = "source_gitlab.source:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["source_gitlab*"]
+
+[tool.setuptools.package-data]
+source_gitlab = ["spec.json", "schemas/*.json"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["airbyte_cdk.*"]
+ignore_missing_imports = true
+implicit_reexport = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+import time
+from abc import ABC, abstractmethod
+from collections.abc import Iterable, Mapping, MutableMapping
+from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import urlsplit
+
+import requests
+from airbyte_cdk.models import SyncMode
+from airbyte_cdk.sources.streams.http import HttpStream
+
+_API_PREFIX = "/api/v4/"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class GitlabAuthError(RuntimeError):
+    pass
+
+
+class GitlabApiError(RuntimeError):
+    pass
+
+
+class GitlabStream(HttpStream, ABC):
+    primary_key = "unique_key"
+    raise_on_http_errors = False
+    page_size = 100
+    data_source = "insight_gitlab"
+    skippable_statuses: frozenset[int] = frozenset()
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        tenant_id: str,
+        source_id: str,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._base_url = base_url
+        self._token = token
+        self._tenant_id = tenant_id
+        self._source_id = source_id
+
+    @property
+    def url_base(self) -> str:
+        return f"{self._base_url}/api/v4/"
+
+    def request_headers(
+        self,
+        stream_state: Mapping[str, Any] | None = None,
+        stream_slice: Mapping[str, Any] | None = None,
+        next_page_token: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        return {"PRIVATE-TOKEN": self._token}
+
+    def next_page_token(self, response: requests.Response) -> Mapping[str, Any] | None:
+        nxt = response.links.get("next")
+        if nxt and nxt.get("url"):
+            return {"next_url": nxt["url"]}
+        return None
+
+    def path(
+        self,
+        *,
+        stream_state: Mapping[str, Any] | None = None,
+        stream_slice: Mapping[str, Any] | None = None,
+        next_page_token: Mapping[str, Any] | None = None,
+    ) -> str:
+        if next_page_token and "next_url" in next_page_token:
+            return self._relative_next_path(str(next_page_token["next_url"]))
+        return self._path(stream_slice=stream_slice)
+
+    def _relative_next_path(self, next_url: str) -> str:
+        split = urlsplit(next_url)
+        path = split.path
+        marker = path.find(_API_PREFIX)
+        relative = path[marker + len(_API_PREFIX) :] if marker != -1 else path.lstrip("/")
+        return f"{relative}?{split.query}" if split.query else relative
+
+    def request_params(
+        self,
+        stream_state: Mapping[str, Any] | None = None,
+        stream_slice: Mapping[str, Any] | None = None,
+        next_page_token: Mapping[str, Any] | None = None,
+    ) -> MutableMapping[str, Any]:
+        if next_page_token:
+            return {}
+        return dict(self._initial_params(stream_slice))
+
+    def should_retry(self, response: requests.Response) -> bool:
+        if not isinstance(response, requests.Response):
+            return True
+        if response.status_code == 429:
+            return True
+        return response.status_code in (500, 502, 503, 504)
+
+    def backoff_time(self, response: requests.Response) -> float | None:
+        if not isinstance(response, requests.Response):
+            return 60.0
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return max(float(retry_after), 1.0)
+                except ValueError:
+                    pass
+            reset = response.headers.get("RateLimit-Reset")
+            if reset:
+                try:
+                    return max(float(reset) - time.time(), 1.0)
+                except ValueError:
+                    pass
+            return 60.0
+        return None
+
+    def parse_response(
+        self,
+        response: requests.Response,
+        *,
+        stream_state: Mapping[str, Any] | None = None,
+        stream_slice: Mapping[str, Any] | None = None,
+        next_page_token: Mapping[str, Any] | None = None,
+    ) -> Iterable[Mapping[str, Any]]:
+        code = response.status_code
+        if self._should_skip(code, stream_slice, next_page_token):
+            self.logger.warning(
+                f"{self.name}: HTTP {code} on {response.url} — skipping this "
+                f"entity and advancing (expected for deleted / disabled / "
+                f"hidden resources)"
+            )
+            return
+        if code in (401, 403):
+            raise GitlabAuthError(
+                f"GitLab auth error ({code}): {response.text[:200]}"
+            )
+        if code >= 400:
+            raise GitlabApiError(
+                f"Unexpected HTTP {code} on {response.url}: {response.text[:200]}"
+            )
+        data = response.json()
+        records = data if isinstance(data, list) else [data]
+        for record in records:
+            yield self._envelope(record, stream_slice)
+
+    def _should_skip(
+        self,
+        code: int,
+        stream_slice: Mapping[str, Any] | None,
+        next_page_token: Mapping[str, Any] | None,
+    ) -> bool:
+        return next_page_token is None and code in self.skippable_statuses
+
+    def _envelope(
+        self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        out = dict(self._project(record, stream_slice))
+        out["tenant_id"] = self._tenant_id
+        out["source_id"] = self._source_id
+        out["data_source"] = self.data_source
+        out["collected_at"] = _now_iso()
+        parts = self._record_key(record, stream_slice)
+        out["unique_key"] = ":".join([self._tenant_id, self._source_id, *parts])
+        return out
+
+    @abstractmethod
+    def _project(
+        self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
+    ) -> Mapping[str, Any]: ...
+
+    @abstractmethod
+    def _path(self, *, stream_slice: Mapping[str, Any] | None) -> str: ...
+
+    @abstractmethod
+    def _initial_params(
+        self, stream_slice: Mapping[str, Any] | None
+    ) -> Mapping[str, Any]: ...
+
+    @abstractmethod
+    def _record_key(
+        self, record: Mapping[str, Any], stream_slice: Mapping[str, Any] | None
+    ) -> list[str]: ...
+
+
+class ScopedGitlabStream(GitlabStream, ABC):
+    def __init__(
+        self,
+        *,
+        groups: tuple[str, ...],
+        projects: tuple[str, ...],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._groups = groups
+        self._projects = projects
+
+    def stream_slices(self, **kwargs: Any) -> Iterable[Mapping[str, Any] | None]:
+        if not self._groups and not self._projects:
+            yield {"mode": "instance"}
+            return
+        for group in self._groups:
+            yield {"mode": "group", "group": group}
+        for project in self._projects:
+            yield {"mode": "project", "project": project}
+
+
+class GitlabSubstream(GitlabStream, ABC):
+    skippable_statuses = frozenset({404})
+
+    def __init__(self, *, parent: GitlabStream, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._parent = parent
+
+    def stream_slices(self, **kwargs: Any) -> Iterable[Mapping[str, Any] | None]:
+        for parent_slice in self._parent.stream_slices(sync_mode=SyncMode.full_refresh):
+            for parent_record in self._parent.read_records(
+                sync_mode=SyncMode.full_refresh, stream_slice=parent_slice
+            ):
+                yield {"parent": parent_record}
+
+    def _parent_value(
+        self, stream_slice: Mapping[str, Any] | None, field: str
+    ) -> Any:
+        parent = (stream_slice or {}).get("parent") or {}
+        value = parent.get(field)
+        if value is None:
+            raise GitlabApiError(
+                f"{self.name}: parent record missing routing field '{field}' "
+                f"— cannot build request path (routing bug, not a deleted entity)"
+            )
+        return value
