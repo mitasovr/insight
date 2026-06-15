@@ -675,6 +675,7 @@ spec:
 metadata:
   autoImportSchema:
     support_tickets: true
+    support_ticket_ids: true
     support_agents: true
     zendesk_satisfaction_ratings: true
     support_ticket_events: true
