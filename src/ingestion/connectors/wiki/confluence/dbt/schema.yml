@@ -17,7 +17,9 @@ sources:
     tables:
       - name: wiki_spaces
       - name: wiki_pages   # inferred windowed/event (updated_at)
-        loaded_at_field: parseDateTimeBestEffortOrNull(updated_at)
+        # ms-precision parse to match the connector's own model convention
+        # (confluence__wiki_pages: parseDateTime64BestEffortOrNull(updated_at, 3)).
+        loaded_at_field: parseDateTime64BestEffortOrNull(updated_at, 3)
         freshness:
           warn_after: {count: 96, period: hour}
           error_after: {count: 168, period: hour}
