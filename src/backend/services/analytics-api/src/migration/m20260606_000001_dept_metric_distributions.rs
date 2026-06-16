@@ -15,7 +15,7 @@
 //! migration's private helpers (which may later change under it).
 //!
 //! Both bullet-row leaves keep `GROUP BY person_id`, so
-//! `inject_date_filter_into_subqueries` injects the metric_date range before
+//! `inject_date_filter_into_subqueries` injects the `metric_date` range before
 //! each per-person GROUP BY exactly as in the source migrations. The handler
 //! re-appends the outer `GROUP BY org_unit_id, metric_key`; an
 //! `org_unit_id IN (...)` filter lands in the outer WHERE against the
@@ -282,7 +282,11 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        for hex in [DEPT_DIST_DELIVERY_HEX, DEPT_DIST_COLLAB_HEX, DEPT_DIST_GIT_HEX] {
+        for hex in [
+            DEPT_DIST_DELIVERY_HEX,
+            DEPT_DIST_COLLAB_HEX,
+            DEPT_DIST_GIT_HEX,
+        ] {
             db.execute_unprepared(&format!("DELETE FROM metrics WHERE id = UNHEX('{hex}')"))
                 .await?;
         }
@@ -307,7 +311,14 @@ mod tests {
             query.starts_with("SELECT org_unit_id, metric_key,"),
             "{label}: outer projection must lead with `org_unit_id, metric_key`, got:\n{query}"
         );
-        for alias in ["AS p25", "AS median", "AS p75", "AS range_min", "AS range_max", "AS n"] {
+        for alias in [
+            "AS p25",
+            "AS median",
+            "AS p75",
+            "AS range_min",
+            "AS range_max",
+            "AS n",
+        ] {
             assert!(
                 query.contains(alias),
                 "{label}: missing output alias `{alias}`, got:\n{query}"

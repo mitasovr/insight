@@ -20,7 +20,7 @@
 //!
 //! Roster scoping stays at the handler (`person_id IN (roster)`), so the
 //! outer keeps `GROUP BY p.metric_key`. Both leaves keep `GROUP BY
-//! person_id`, so the date-walker injects the metric_date range before each
+//! person_id`, so the date-walker injects the `metric_date` range before each
 //! per-person GROUP BY exactly as before.
 //!
 //! For Delivery (`…0003`) and Collab (`…0005`) the department cohort is
@@ -28,8 +28,8 @@
 //! we copy it, swap `any(c.team_*)` → `avg(c.team_*)`, and set `n`.
 //! For AI (`…0006`) we copy `m20260604_000003::ic_query` (department cohort
 //! with the active-counter `multiIf` that already NULLs p25/p75 for the
-//! ACTIVE_LIST keys) and keep the active-aware value `multiIf(... sum, avg)`;
-//! the active keys' team_p25/p75 are NULL so `avg(NULL)` stays NULL (neutral,
+//! `ACTIVE_LIST` keys) and keep the active-aware value `multiIf(... sum, avg)`;
+//! the active keys' `team_p25`/`team_p75` are NULL so `avg(NULL)` stays NULL (neutral,
 //! correct). For Code Quality (`…0004`) there is no IC query, so we convert
 //! its current company cohort into a department cohort (add `org_unit_id` to
 //! the cohort SELECT + GROUP BY, join on `org_unit_id`) before blending.
@@ -393,7 +393,7 @@ fn ai_array_join_kv() -> &'static str {
 }
 
 /// NEW AI team query: department cohort (from `m20260604_000003::ic_query`,
-/// with the active-counter multiIf that NULLs p25/p75 for ACTIVE_LIST keys)
+/// with the active-counter `multiIf` that nulls `p25`/`p75` for `ACTIVE_LIST` keys)
 /// blended with `avg(c.team_*)`. Value keeps the active-aware multiIf.
 fn ai_new_team_query() -> String {
     let pp = ai_wide_aggregate_pp();
@@ -675,7 +675,7 @@ mod tests {
     }
 
     /// Common shape for the restored `down()` company-cohort team query: the
-    /// cohort is joined on `c.metric_key = p.metric_key` alone (no org_unit_id
+    /// cohort is joined on `c.metric_key = p.metric_key` alone (no `org_unit_id`
     /// pairing), and the cohort columns are surfaced via `any(c.<prefix>_…`.
     fn assert_company_cohort_shape(query: &str, label: &str, cohort_prefix: &str) {
         assert!(
@@ -780,7 +780,11 @@ mod tests {
 
     #[test]
     fn down_restores_company_cohort_for_each_section() {
-        assert_company_cohort_shape(&delivery_old_team_query(), "delivery_old_team_query", "company");
+        assert_company_cohort_shape(
+            &delivery_old_team_query(),
+            "delivery_old_team_query",
+            "company",
+        );
         assert_company_cohort_shape(&collab_old_team_query(), "collab_old_team_query", "company");
         assert_company_cohort_shape(&ai_old_team_query(), "ai_old_team_query", "company");
         assert_company_cohort_shape(

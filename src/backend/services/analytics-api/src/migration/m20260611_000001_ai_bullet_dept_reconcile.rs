@@ -24,7 +24,7 @@
 //!   - Team (`…0006`): the same department cohort, blended with `avg(c.team_*)`
 //!     and `n = count(p.v_period)` (the `m20260606_000003` Team shape).
 //!
-//! The active-marker keys keep their `multiIf` NULLing (`p25`/`p75` NULL, the
+//! The active-marker keys keep their `multiIf` null-guard (`p25`/`p75` NULL, the
 //! "X of N active" semantics for median/min/max), so `avg(NULL)` stays NULL
 //! and they render neutral — correct for member-scale counters.
 //!
@@ -115,7 +115,7 @@ fn array_join_kv() -> &'static str {
 }
 
 /// Department cohort with the `p25`/`p75`/`n` distribution and the
-/// active-marker `multiIf` NULLing (shared by the new IC + Team queries).
+/// active-marker `multiIf` null-guard (shared by the new IC + Team queries).
 /// Joined on `(metric_key, org_unit_id)`.
 fn dept_cohort_join(pp: &str, kv: &str) -> String {
     format!(
@@ -346,7 +346,10 @@ mod tests {
 
     fn assert_has_22_keys(q: &str, label: &str) {
         for key in EXPECTED_METRIC_KEYS {
-            assert!(q.contains(&format!("('{key}',")), "{label}: missing key {key}");
+            assert!(
+                q.contains(&format!("('{key}',")),
+                "{label}: missing key {key}"
+            );
         }
         assert!(
             q.contains("chatgpt_active") && q.contains("codex_lines"),
@@ -362,7 +365,11 @@ mod tests {
             q.contains("c.org_unit_id = p.org_unit_id"),
             "IC must join the department cohort on org_unit_id"
         );
-        for col in ["any(c.team_p25) AS p25", "any(c.team_p75) AS p75", "any(c.team_n) AS n"] {
+        for col in [
+            "any(c.team_p25) AS p25",
+            "any(c.team_p75) AS p75",
+            "any(c.team_n) AS n",
+        ] {
             assert!(q.contains(col), "IC must surface distribution via `{col}`");
         }
         assert!(
@@ -424,13 +431,19 @@ mod tests {
         assert_has_22_keys(&team, "old_team_query");
         assert_has_22_keys(&ic, "old_ic_query");
         // Company cohort on the Team side, no distribution columns.
-        assert!(team.contains("any(c.company_median)") && team.contains("ON c.metric_key = p.metric_key"));
+        assert!(
+            team.contains("any(c.company_median)")
+                && team.contains("ON c.metric_key = p.metric_key")
+        );
         for q in [&team, &ic] {
             assert!(
                 !q.contains(") AS p25") && !q.contains(") AS p75") && !q.contains(") AS n"),
                 "down() must drop the distribution columns (m20260609 shape)"
             );
         }
-        assert!(ic.contains("c.org_unit_id = p.org_unit_id"), "IC down keeps department cohort");
+        assert!(
+            ic.contains("c.org_unit_id = p.org_unit_id"),
+            "IC down keeps department cohort"
+        );
     }
 }

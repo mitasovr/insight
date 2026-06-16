@@ -7,7 +7,7 @@
 //! view's section set is being aligned to the IC set (Task delivery, Git
 //! output, Collaboration, AI), so the team needs its own git bullet that:
 //!   - reads the same `insight.git_bullet_rows` per-person aggregate as `…0018`
-//!     (commits / clean_loc / prs / cycle-time / size + the computed ratios);
+//!     (commits / `clean_loc` / prs / cycle-time / size + the computed ratios);
 //!   - blends the members' DEPARTMENT cohorts via `avg(c.team_*)` joined on
 //!     `org_unit_id` (the headcount-weighted expectation), with `n =
 //!     count(p.v_period)` — identical in shape to the delivery/collab/ai team

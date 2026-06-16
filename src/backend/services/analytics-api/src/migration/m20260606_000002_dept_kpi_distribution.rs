@@ -19,7 +19,7 @@
 //! The per-person rollup is copied verbatim from
 //! `m20260604_000006_ic_kpis_peer_median::per_person_rollup` as a
 //! self-contained helper (repo convention: a migration owns the exact SQL it
-//! installs). `inject_date_filter_into_subqueries` injects the metric_date
+//! installs). `inject_date_filter_into_subqueries` injects the `metric_date`
 //! range before the rollup's `GROUP BY person_id`; the handler re-appends the
 //! outer `GROUP BY org_unit_id, metric_key`, and an `org_unit_id IN (...)`
 //! filter binds against the promoted `org_unit_id` column.

@@ -17,7 +17,7 @@
 //! Team value scoping is done by the handler's `person_id IN (roster)`
 //! filter, so the query keeps the original `GROUP BY metric_key` shape —
 //! no supervisor join. Both leaves still `GROUP BY person_id`, so
-//! `inject_date_filter_into_subqueries` injects the metric_date range
+//! `inject_date_filter_into_subqueries` injects the `metric_date` range
 //! before each GROUP BY exactly as before.
 
 use sea_orm_migration::prelude::*;

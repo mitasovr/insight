@@ -515,7 +515,7 @@ fn extract_odata_value(filter: &str, field: &str, op: &str) -> Option<String> {
     None
 }
 
-/// Parse an OData `field in ('a','b',…)` list into its values. Person_ids are
+/// Parse an `OData` `field in ('a','b',…)` list into its values. `person_id`s are
 /// emails (no `)`/`,` inside), so the paren group is delimited simply. Returns
 /// `None` for an absent or empty list; the caller binds each value as a `?`.
 fn extract_odata_in_values(filter: &str, field: &str) -> Option<Vec<String>> {

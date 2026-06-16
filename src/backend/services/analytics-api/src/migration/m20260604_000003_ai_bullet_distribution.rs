@@ -15,7 +15,7 @@
 //! filter, so the team query keeps the original `GROUP BY metric_key`
 //! shape — no supervisor join. Both bullet-row leaves still
 //! `GROUP BY person_id`, so `inject_date_filter_into_subqueries` injects
-//! the metric_date range before each GROUP BY exactly as before.
+//! the `metric_date` range before each GROUP BY exactly as before.
 
 use sea_orm_migration::prelude::*;
 

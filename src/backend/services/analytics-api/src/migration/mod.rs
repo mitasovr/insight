@@ -90,7 +90,6 @@ impl MigratorTrait for Migrator {
             Box::new(m20260610_000001_fix_ai_label_drift::Migration),
             Box::new(m20260611_000001_ai_bullet_dept_reconcile::Migration),
             Box::new(m20260612_000001_team_git_bullet::Migration),
-
         ]
     }
 }

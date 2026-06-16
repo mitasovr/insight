@@ -6,7 +6,7 @@
 //! Shape: the existing per-person rollup becomes the `k` subquery (now also
 //! carrying `org_unit_id`). A second use of the identical rollup is grouped
 //! by `org_unit_id` into department medians (`<kpi>_median`) + cohort size
-//! (`peer_n`), LEFT JOINed back on `org_unit_id`. The cohort medians reuse
+//! (`peer_n`), LEFT-joined back on `org_unit_id`. The cohort medians reuse
 //! the EXACT per-person sum/avg rules the value uses, so value and median
 //! are same-method by construction.
 //!
