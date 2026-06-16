@@ -376,6 +376,17 @@ async fn execute_metric_query(
             let _ = write!(sql, " AND person_id IN ({placeholders})");
             params.extend(ids);
         }
+        // Department-scoped distribution metrics: the FE passes the
+        // org_unit_ids of the departments represented in the roster as
+        // `org_unit_id in ('a','b',…)` so the per-department distribution
+        // metrics return only the relevant departments. `org_unit_id` is a
+        // column of the FROM, so this lands in the outer WHERE before the
+        // re-appended GROUP BY. One bound `?` per id; never interpolated.
+        if let Some(ids) = extract_odata_in_values(filter, "org_unit_id") {
+            let placeholders = vec!["?"; ids.len()].join(", ");
+            let _ = write!(sql, " AND org_unit_id IN ({placeholders})");
+            params.extend(ids);
+        }
         // Drill filter — used by IC Dashboard drill modal.
         if let Some(drill_id) = extract_odata_value(filter, "drill_id", "eq") {
             sql.push_str(" AND drill_id = ?");
@@ -1267,6 +1278,15 @@ mod tests {
         assert_eq!(
             extract_odata_in_values("person_id in ()", "person_id"),
             None
+        );
+    }
+
+    #[test]
+    fn extract_in_list_parses_quoted_org_unit_ids() {
+        let f = "metric_date ge '2026-03-04' and org_unit_id in ('eng', 'sales', 'ops')";
+        assert_eq!(
+            extract_odata_in_values(f, "org_unit_id"),
+            Some(vec!["eng".into(), "sales".into(), "ops".into()])
         );
     }
 

@@ -31,6 +31,9 @@ mod m20260604_000007_drop_peer_cohort_stats_metric;
 mod m20260604_000008_drop_ic_kpi_peer_median_metric;
 mod m20260604_000009_member_metric_values;
 mod m20260605_000001_member_prs_metric;
+mod m20260606_000001_dept_metric_distributions;
+mod m20260606_000002_dept_kpi_distribution;
+mod m20260606_000003_team_bullet_blended_dept;
 
 #[cfg(test)]
 mod live_tests;
@@ -74,6 +77,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260604_000008_drop_ic_kpi_peer_median_metric::Migration),
             Box::new(m20260604_000009_member_metric_values::Migration),
             Box::new(m20260605_000001_member_prs_metric::Migration),
+            Box::new(m20260606_000001_dept_metric_distributions::Migration),
+            Box::new(m20260606_000002_dept_kpi_distribution::Migration),
+            Box::new(m20260606_000003_team_bullet_blended_dept::Migration),
         ]
     }
 }
