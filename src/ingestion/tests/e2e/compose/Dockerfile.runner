@@ -2,7 +2,7 @@
 #
 # Bakes in:
 #   - Python 3.12 + e2e_lib deps (pytest, clickhouse-connect, pandas, dbt-clickhouse, …)
-#   - Rust 1.92 (cargo+rustc — edition2024 required by src/backend)
+#   - Rust 1.95 (cargo+rustc — matches `rust-version` in src/backend/Cargo.toml)
 #   - protobuf-compiler (used by some src/backend crates)
 #
 # The repo is bind-mounted at /workspace; the cargo target dir + cargo registry
@@ -19,7 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH \
-    RUST_VERSION=1.92.0
+    RUST_VERSION=1.95.0
 
 # ── System tooling ──────────────────────────────────────────────────────
 # build-essential + pkg-config: cargo needs a linker and pkg-config for native

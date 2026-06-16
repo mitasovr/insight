@@ -28,7 +28,7 @@
 //!
 //! Backend-computed `metric_key`s after this migration: 16 → 19.
 //! ⚠️  FE-visible status: the three new keys are **not yet rendered** by
-//! the frontend — `BULLET_DEFS` / `IC_KPI_DEFS` in `cyber-insight-front`
+//! the frontend — `BULLET_DEFS` / `IC_KPI_DEFS` in `insight-front`
 //! need corresponding entries (tracked as a follow-up to INSIGHT-458).
 //! Catalog metadata (label / unit / thresholds) is seeded by the paired
 //! migration `m20260601_000002_seed_claude_team_metrics_catalog`.
@@ -268,7 +268,7 @@ mod tests {
         "cursor_total_lines",
     ];
 
-    /// Dropped metric_keys from m20260519 that must NOT be read via sumIf.
+    /// Dropped `metric_keys` from m20260519 that must NOT be read via sumIf.
     const FORBIDDEN_RAW_KEY_READS: &[&str] = &[
         "cursor_acceptance",
         "cc_tool_acceptance",
@@ -278,7 +278,7 @@ mod tests {
         "claude_web",
     ];
 
-    /// New Claude Team metric_keys must NOT appear in ACTIVE_LIST
+    /// New Claude Team `metric_keys` must NOT appear in `ACTIVE_LIST`
     /// (they are counters, not active-person markers).
     const CLAUDE_TEAM_KEYS: &[&str] = &["cc_cost", "prs_with_cc", "prs_total"];
 

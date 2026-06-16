@@ -2,7 +2,7 @@
 # Insight platform — DEV bring-up from source.
 #
 # Use this when you work on the codebase: builds Docker images from src/,
-# creates a local Kind cluster (or targets a dev-owned remote like virtuozzo),
+# creates a local Kind cluster (or targets a dev-owned remote cluster),
 # loads images into the cluster, and deploys all services.
 #
 # NOT for end-user installations. For customers / production-like installs
@@ -21,8 +21,8 @@
 #
 # Usage:
 #   ./dev-up.sh                         # --env local, all components
-#   ./dev-up.sh --env virtuozzo         # remote cluster, all components
-#   ./dev-up.sh --env virtuozzo app     # backend + frontend only
+#   ./dev-up.sh --env remote            # remote cluster, all components
+#   ./dev-up.sh --env remote app        # backend + frontend only
 #   ./dev-up.sh ingestion               # only ingestion (default env=local)
 #
 # Valid components: all | ingestion | app | backend | frontend
@@ -261,7 +261,7 @@ build_and_load_image() {
 # would otherwise crash with `FE_REPO: unbound variable` after the
 # toolbox/jira-enrich builds succeed but before the values file is
 # generated.
-FE_REPO="${FE_IMAGE_REPOSITORY:-ghcr.io/cyberfabric/insight-front}"
+FE_REPO="${FE_IMAGE_REPOSITORY:-ghcr.io/constructorfabric/insight-front}"
 FE_TAG="${FE_IMAGE_TAG:-$(image_tag_for frontend)}"
 FE_IMAGE="${FE_REPO}:${FE_TAG}"
 
@@ -272,9 +272,10 @@ FE_IMAGE="${FE_REPO}:${FE_TAG}"
 if [[ "$COMPONENT" != "ingestion" ]]; then
   echo "=== Building backend images ==="
   build_and_load_image analytics-api src/backend/services/analytics-api/Dockerfile
-  # The .NET 9 identity service uses its OWN build context (the service
-  # folder), unlike the Rust services which share `src/backend/` as context.
-  build_and_load_image identity      src/backend/services/identity/Dockerfile src/backend/services/identity/
+  # All three backend Dockerfiles now share `src/backend/` as context so
+  # the docker-compose dev stack can COPY a shared docker-entrypoint.sh
+  # from the same place.
+  build_and_load_image identity      src/backend/services/identity/Dockerfile
   build_and_load_image api-gateway   src/backend/services/api-gateway/Dockerfile
 
   # Frontend — prefer a local build from the neighbouring insight-front
@@ -565,7 +566,7 @@ if [[ "$CLUSTER_MODE" == "local" || "${SHOW_CREDS:-}" == "1" ]]; then
   [[ -n "$MDB_ROOT" ]]   && echo "  MariaDB  root                / $MDB_ROOT"
   [[ -n "$REDIS_PASS" ]] && echo "  Redis    default             / $REDIS_PASS"
 else
-  # For remote envs (virtuozzo, prod-like) — DO NOT dump passwords into
+  # For remote (prod-like) envs — DO NOT dump passwords into
   # the developer's terminal scrollback. Print only how to fetch them.
   echo "  (remote cluster — passwords not printed; pass SHOW_CREDS=1 to override)"
   echo "  Fetch with:"

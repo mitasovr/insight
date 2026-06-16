@@ -29,7 +29,7 @@ date: 2026-05-12
 
 ### 1.1 Architectural Vision
 
-The Deployment subsystem is a **two-layer** distribution pipeline. Layer one is the artifact: a single Helm umbrella chart at `charts/insight/`, built and published per merge to `main` of `cyberfabric/insight` as `oci://ghcr.io/cyberfabric/charts/insight:<semver>` by the Chart Publishing CI workflow, alongside per-service application images at `ghcr.io/cyberfabric/insight-<service>:<buildtag>`. Layer two is the set of consumers: the private `infra/insight-gitops` repository (driving every Cyberfabric-operated cluster — internal `dev`/`test`/`stage` and each customer-named production cluster), the `dev-up.sh` wrapper (driving a local Kind/OrbStack cluster), and any external Helm consumer (Constructor Platform tenants, evaluators, partners) who pulls the chart and runs it with their own tooling. The architectural rationale for publishing the chart this way is captured in [ADR-0001](./ADR/0001-chart-publishing-on-merge.md); the operational contract for the gitops consumer is captured in the [gitops SPEC](../gitops/README.md).
+The Deployment subsystem is a **two-layer** distribution pipeline. Layer one is the artifact: a single Helm umbrella chart at `charts/insight/`, built and published per merge to `main` of `constructorfabric/insight` as `oci://ghcr.io/constructorfabric/charts/insight:<semver>` by the Chart Publishing CI workflow, alongside per-service application images at `ghcr.io/constructorfabric/insight-<service>:<buildtag>`. Layer two is the set of consumers: the private `infra/insight-gitops` repository (driving every Cyberfabric-operated cluster — internal `dev`/`test`/`stage` and each customer-named production cluster), the `dev-up.sh` wrapper (driving a local Kind/OrbStack cluster), and any external Helm consumer (Constructor Platform tenants, evaluators, partners) who pulls the chart and runs it with their own tooling. The architectural rationale for publishing the chart this way is captured in [ADR-0001](./ADR/0001-chart-publishing-on-merge.md); the operational contract for the gitops consumer is captured in the [gitops SPEC](../gitops/README.md).
 
 The artifact is deliberately thin: the umbrella owns the chart-shape contract but does not own controllers or CRDs. It orchestrates eight subcharts (four infra + four app services), emits one bridge object (`{release}-platform` ConfigMap), emits Argo `WorkflowTemplate` objects when gated, and runs a fail-fast `insight.validate` template at render time. Every infra subchart is pluggable via the `<svc>.deploy: true|false` toggle plus the same flat `<svc>.host` / `.port` / `.passwordSecret` shape — read identically whether the subchart is bundled or external. That dual-purpose toggle is what makes one chart serve two install shapes.
 
@@ -48,7 +48,7 @@ Tenant separation across customers is at the **cluster boundary** for gitops pro
 
 | Requirement | Design Response |
 |-------------|-----------------|
-| `cpt-insightspec-fr-dep-umbrella-chart` | Umbrella chart `charts/insight/` with eight declared dependencies in `Chart.yaml` (four infra subcharts with `condition: <alias>.deploy` + four app-service subcharts, of which identity-resolution is the only one gated). One artifact, one consumer-facing reference: `oci://ghcr.io/cyberfabric/charts/insight`. |
+| `cpt-insightspec-fr-dep-umbrella-chart` | Umbrella chart `charts/insight/` with eight declared dependencies in `Chart.yaml` (four infra subcharts with `condition: <alias>.deploy` + four app-service subcharts, of which identity-resolution is the only one gated). One artifact, one consumer-facing reference: `oci://ghcr.io/constructorfabric/charts/insight`. |
 | `cpt-insightspec-fr-dep-mandatory-apps` | API Gateway, Analytics API and Frontend are declared without a `condition:` in `Chart.yaml`; only Identity Resolution carries `condition: identityResolution.deploy`. |
 | `cpt-insightspec-fr-dep-optional-identity-resolution` | `identityResolution.deploy: false` is the default in `values.yaml`; subchart renders only when explicitly enabled. |
 | `cpt-insightspec-fr-dep-ingestion-templates` | `templates/ingestion/*.yaml` are first-class Helm templates that consume the umbrella's named helpers (`insight.clickhouse.fqdn`, `insight.airbyte.url`, …) directly. Argo expression syntax is escaped with backticks to survive Helm templating. Gated by `ingestion.templates.enabled`. |
@@ -57,7 +57,7 @@ Tenant separation across customers is at the **cluster boundary** for gitops pro
 | `cpt-insightspec-fr-dep-fail-fast-validation` | `insight.validate` template in `_helpers.tpl` — invoked from `NOTES.txt` on every install — calls `fail` on missing required fields across OIDC, external-mode infra, and bundled-infra passwords. |
 | `cpt-insightspec-fr-dep-service-resolution-helpers` | Named helpers per dependency (`insight.clickhouse.host/port/fqdn/url`, `insight.mariadb.*`, `insight.redis.*`, `insight.redpanda.brokers`, `insight.airbyte.url`, app-service host helpers) return internal DNS when bundled, external host verbatim otherwise, without appending the cluster suffix to an external hostname. |
 | `cpt-insightspec-fr-dep-chart-publishing` | `Chart Publishing CI` component (the `publish-chart` job in `.github/workflows/build-images.yml`) runs per merge to `main`: builds changed images, bumps affected subcharts' `appVersion`, patch-bumps the umbrella, packages, pushes to GHCR, auto-commits version bumps back. Sequence documented in §3.6 "Per-merge chart publishing". |
-| `cpt-insightspec-fr-dep-oci-distribution` | Single artifact reference `oci://ghcr.io/cyberfabric/charts/insight:<semver>`; consumer-side pull is plain `helm pull` / `helm upgrade --install`. No canonical installer, no App-of-Apps shipped from `cyberfabric/insight`. |
+| `cpt-insightspec-fr-dep-oci-distribution` | Single artifact reference `oci://ghcr.io/constructorfabric/charts/insight:<semver>`; consumer-side pull is plain `helm pull` / `helm upgrade --install`. No canonical installer, no App-of-Apps shipped from `constructorfabric/insight`. |
 | `cpt-insightspec-fr-dep-subchart-appversion-contract` | Each subchart's `values.yaml` defaults `image.tag = ""` and the templates resolve via `default .Chart.AppVersion`. The CI's per-rebuilt-service step bumps that subchart's `appVersion` to the build tag of its image. Per-service granularity is structural. |
 | `cpt-insightspec-fr-dep-umbrella-versioning` | The CI patch-bumps the umbrella's `version` per publish and sets `appVersion` to the build tag. The gitops repo pins one umbrella semver per env in `.insight-version`. |
 | `cpt-insightspec-fr-dep-dual-purpose-toggle` | `<svc>.deploy: true|false` toggles on the four infra subcharts. Same chart, two install shapes; cross-namespace wiring uses the same `<svc>.host` / `.port` shape as Constructor Platform external mode. Documented in the chart README and the gitops SPEC §1.5. |
@@ -84,11 +84,11 @@ Tenant separation across customers is at the **cluster boundary** for gitops pro
                 ┌──────────────────────────────────────────────┐
                 │           Artifact layer (CI side)            │
                 │                                              │
-                │ cyberfabric/insight repo                     │
+                │ constructorfabric/insight repo                     │
                 │  └─ Chart Publishing CI (per merge to main)  │
                 │     bumps subchart appVersion → builds       │
                 │     images → packages umbrella → pushes      │
-                │     oci://ghcr.io/cyberfabric/charts/insight │
+                │     oci://ghcr.io/constructorfabric/charts/insight │
                 │     :<semver>                                │
                 └────────────────────────┬─────────────────────┘
                                          │ pull oci://… by tag
@@ -151,7 +151,7 @@ The chart's `<svc>.deploy: true|false` toggle is the dev-vs-prod switch. `dev-up
 
 - [ ] `p1` - **ID**: `cpt-insightspec-principle-dep-single-artifact-ref`
 
-Every consumer addresses the chart by the same OCI URL (`oci://ghcr.io/cyberfabric/charts/insight`) and a semver tag. No sibling-checkout dependency, no curl-from-GitHub at deploy time, no per-consumer publishing flow. Cyberfabric SRE, Constructor Platform tenants, external customers and `dev-up.sh` (for testing the published artifact) all pull from the same place.
+Every consumer addresses the chart by the same OCI URL (`oci://ghcr.io/constructorfabric/charts/insight`) and a semver tag. No sibling-checkout dependency, no curl-from-GitHub at deploy time, no per-consumer publishing flow. Cyberfabric SRE, Constructor Platform tenants, external customers and `dev-up.sh` (for testing the published artifact) all pull from the same place.
 
 **ADRs**: [ADR-0001](./ADR/0001-chart-publishing-on-merge.md).
 
@@ -175,7 +175,7 @@ For gitops production, L2 system services (stateful infra in `insight-infra`) an
 
 - [ ] `p2` - **ID**: `cpt-insightspec-principle-dep-customer-named-envs`
 
-The gitops repo has no generic "prod". Internal envs (`dev`, `test`, `stage`) and customer-named envs (`virtuozzo`, `constructor`, `acronis`, …) each get their own directory, their own `.insight-version` history (via merge requests for non-auto envs), and their own per-env `CONFIRM=yes-deploy-<env>` token. The chart itself is environment-agnostic; the env model lives in the gitops Makefile.
+The gitops repo has no generic "prod". Internal envs (`dev`, `test`, `stage`) and customer-named envs (`acme`, `globex`, …) each get their own directory, their own `.insight-version` history (via merge requests for non-auto envs), and their own per-env `CONFIRM=yes-deploy-<env>` token. The chart itself is environment-agnostic; the env model lives in the gitops Makefile.
 
 **ADRs**: none.
 
@@ -225,7 +225,7 @@ Airbyte chart pinned to 1.8.5+ (app 1.8.5+) at the consumer side. Chart 1.9.x wa
 
 - [ ] `p3` - **ID**: `cpt-insightspec-constraint-dep-frontend-amd64`
 
-The published `ghcr.io/cyberfabric/insight-front` image ships only a linux/amd64 manifest. The dev wrapper works around this by rebuilding from the sibling `insight-front` checkout on arm64 hosts. Production installs on amd64 clusters are unaffected; the publish workflow does not bump frontend image tags automatically (the frontend source lives in a separate repo).
+The published `ghcr.io/constructorfabric/insight-front` image ships only a linux/amd64 manifest. The dev wrapper works around this by rebuilding from the sibling `insight-front` checkout on arm64 hosts. Production installs on amd64 clusters are unaffected; the publish workflow does not bump frontend image tags automatically (the frontend source lives in a separate repo).
 
 **ADRs**: none.
 
@@ -243,8 +243,8 @@ The canonical `values.yaml` hard-codes the `insight-` prefix in a handful of app
 
 Deployment has no runtime domain model — it neither stores nor serves data. The artifacts it manipulates are Helm packaging and OCI registry resources, plus the Kubernetes resources rendered at consume time. The relevant entity set is:
 
-- **Chart artifact**: a packaged Helm chart (`insight-<version>.tgz`) addressable by `(oci://ghcr.io/cyberfabric/charts/insight, version)`. One produced per merge to `main`. Immutable once published.
-- **Service image**: a container image at `ghcr.io/cyberfabric/insight-<service>:<buildtag>`. Referenced by exactly one subchart's `appVersion`.
+- **Chart artifact**: a packaged Helm chart (`insight-<version>.tgz`) addressable by `(oci://ghcr.io/constructorfabric/charts/insight, version)`. One produced per merge to `main`. Immutable once published.
+- **Service image**: a container image at `ghcr.io/constructorfabric/insight-<service>:<buildtag>`. Referenced by exactly one subchart's `appVersion`.
 - **Subchart**: a Helm subchart aggregated under the umbrella, identified by `name`, optionally `alias`, `version`, `repository`, and (for infra) `condition: <alias>.deploy`.
 - **Release**: a Helm release applied by a consumer (the L3 umbrella release, the L2 per-service releases in the gitops shape, the Airbyte/Argo releases in `dev-up.sh`). Identified by `(namespace, release-name)`.
 - **Values file**: a YAML file that parameterises a release. The chart's `values.yaml` is the canonical reference; consumer overlays compose on top.
@@ -263,7 +263,7 @@ Relationships:
 
 ```mermaid
 graph TB
-    subgraph CI["Artifact production (cyberfabric/insight CI)"]
+    subgraph CI["Artifact production (constructorfabric/insight CI)"]
         Publish[Chart Publishing CI]
         GHCR[(GHCR: chart + images)]
     end
@@ -351,14 +351,14 @@ A Helm chart without a publishing pipeline is just source in a repo — operator
 
 ##### Responsibility scope
 
-- Triggered on `push` to `main` of `cyberfabric/insight` (and on `workflow_dispatch` from `main`).
+- Triggered on `push` to `main` of `constructorfabric/insight` (and on `workflow_dispatch` from `main`).
 - Computes the build tag (`YYYY.MM.DD.HH.MM-<shortSHA>`, UTC).
-- For each service whose source changed, builds and pushes the image to `ghcr.io/cyberfabric/insight-<service>:<buildtag>`.
+- For each service whose source changed, builds and pushes the image to `ghcr.io/constructorfabric/insight-<service>:<buildtag>`.
 - For each rebuilt service, bumps that subchart's `Chart.yaml` `appVersion` to the build tag (subchart `version` is bumped only by a manual PR change to that subchart's templates).
 - Patch-bumps the umbrella's `Chart.yaml` `version`; sets the umbrella's `appVersion` to the build tag.
 - Runs `helm dependency update charts/insight` (regenerates `Chart.lock` from `file://` subcharts).
 - Packages the umbrella (`helm package charts/insight -d dist/`).
-- Pushes to `oci://ghcr.io/cyberfabric/charts/insight:<version>`.
+- Pushes to `oci://ghcr.io/constructorfabric/charts/insight:<version>`.
 - Auto-commits the version bumps back to `main` with `[skip ci]` and a retry-once-on-non-fast-forward step.
 
 ##### Responsibility boundaries
@@ -510,13 +510,13 @@ The dual-purpose intent of the four `<infra>.deploy` toggles is documented in [`
 - **Implements**: `cpt-insightspec-interface-dep-oci-artifact` (PRD §7.1).
 - **Contracts**: `cpt-insightspec-contract-dep-oci-registry`.
 - **Technology**: Helm OCI (`helm pull oci://…`, `helm upgrade --install oci://…`).
-- **Location**: `oci://ghcr.io/cyberfabric/charts/insight`, tags = umbrella semver.
+- **Location**: `oci://ghcr.io/constructorfabric/charts/insight`, tags = umbrella semver.
 
 **Endpoints Overview**:
 
 | Verb | URL | Effect | Stability |
 |------|-----|--------|-----------|
-| `helm pull` | `oci://ghcr.io/cyberfabric/charts/insight --version <X.Y.Z>` | Downloads the immutable chart tarball for that version. | stable |
+| `helm pull` | `oci://ghcr.io/constructorfabric/charts/insight --version <X.Y.Z>` | Downloads the immutable chart tarball for that version. | stable |
 | `helm show chart` | same | Returns the chart's metadata without downloading. Used by the gitops Makefile's `chart-present` preflight. | stable |
 | `helm upgrade --install <release> oci://… --version <X.Y.Z>` | same | Renders and applies the chart to the cluster. | stable |
 
@@ -590,8 +590,8 @@ The dev wrapper's internal `deploy/scripts/install-*.sh` helpers are not a docum
 
 | Dependency Module | Interface Used | Purpose |
 |-------------------|----------------|---------|
-| `oci://ghcr.io/cyberfabric/charts/insight` | Helm OCI push (CI) and pull (consumers) | Published umbrella chart artifact. |
-| `ghcr.io/cyberfabric/insight-<service>` | docker push (CI) and pull (cluster image-pull) | Application service images. |
+| `oci://ghcr.io/constructorfabric/charts/insight` | Helm OCI push (CI) and pull (consumers) | Published umbrella chart artifact. |
+| `ghcr.io/constructorfabric/insight-<service>` | docker push (CI) and pull (cluster image-pull) | Application service images. |
 
 **Dependency Rules**:
 
@@ -612,7 +612,7 @@ The dev wrapper's internal `deploy/scripts/install-*.sh` helpers are not a docum
 ```mermaid
 sequenceDiagram
     actor Eng as Engineer (PR merged)
-    participant GH as GitHub (cyberfabric/insight)
+    participant GH as GitHub (constructorfabric/insight)
     participant CI as Chart Publishing CI
     participant GHCR as GHCR
     participant Repo as main branch
@@ -621,13 +621,13 @@ sequenceDiagram
     GH->>CI: trigger build-images.yml (push: main)
     CI->>CI: compute build tag YYYY.MM.DD.HH.MM-<sha7>
     CI->>CI: build changed images (matrix per service)
-    CI->>GHCR: push ghcr.io/cyberfabric/insight-<svc>:<buildtag>
+    CI->>GHCR: push ghcr.io/constructorfabric/insight-<svc>:<buildtag>
     CI->>CI: bump rebuilt subcharts' appVersion → buildtag
     CI->>CI: patch-bump umbrella version; set appVersion = buildtag
     CI->>CI: helm dependency update charts/insight
     CI->>CI: helm package charts/insight -d dist/
     CI->>GHCR: helm registry login ghcr.io (GITHUB_TOKEN)
-    CI->>GHCR: helm push dist/insight-<ver>.tgz oci://ghcr.io/cyberfabric/charts
+    CI->>GHCR: helm push dist/insight-<ver>.tgz oci://ghcr.io/constructorfabric/charts
     CI->>Repo: git commit -m "chore(release): umbrella <ver> [skip ci]"
     CI->>Repo: git push (with retry-once on non-fast-forward)
     Repo-->>CI: ack
@@ -750,14 +750,14 @@ Not applicable. The Deployment subsystem stores no data; it produces a chart art
 **Known gaps (post-consolidation)**:
 
 - **Chart publishing auto-commit-back branch-protection token.** The default `GITHUB_TOKEN` cannot bypass branch protection on `main`; until a fine-grained PAT in `RELEASE_PUSH_PAT` or a GitHub App with bypass rights is configured, the version-bump auto-commit must be replayed manually after merge. Tracked.
-- **Frontend image tag in publish CI.** The publish-chart workflow does not bump the frontend image tag because frontend source lives in the separate `cyberfabric/insight-front` repo. Env overlays pin frontend's tag manually. Fix: emit a workflow-dispatch hook in the publish-chart job that accepts a `frontend_tag` input. Tracked as a chart-side SPEC §8 follow-up.
+- **Frontend image tag in publish CI.** The publish-chart workflow does not bump the frontend image tag because frontend source lives in the separate `constructorfabric/insight-front` repo. Env overlays pin frontend's tag manually. Fix: emit a workflow-dispatch hook in the publish-chart job that accepts a `frontend_tag` input. Tracked as a chart-side SPEC §8 follow-up.
 - **`required` short-circuits subchart `image.tag` defaulting.** Despite the umbrella's design saying "image.tag empty → use chart appVersion", subchart deployment templates use `required` without `default`, so env overlays must pin `image.tag` explicitly for api-gateway / analytics-api / identity-resolution / frontend. Replace `required` with `default .Chart.AppVersion`. Tracked as a chart-side SPEC §8 follow-up.
 - **Per-service DB provisioning Helm hook for layered mode.** The chart's `identity-db-init-job.yaml` runs only when `mariadb.deploy: true` (single-namespace fat mode). In the layered model (`mariadb.deploy: false` + external L2 MariaDB), engineers run a one-time `CREATE DATABASE identity` + `GRANT` against L2 mariadb. Fix: pre-install/pre-upgrade Helm hook that works for both bundled and external MariaDB, reading `mariadb-root-password` from `insight-db-creds`. Tracked as a chart-side SPEC §8 follow-up.
 - **`insight-{analytics-api,identity-resolution}-config` composability.** The chart validator forbids `gitops + autoGenerate=true`, so the two composed Secrets are only emitted under `autoGenerate=true`. In gitops production, engineers run `scripts/compose-app-secrets.sh` (in the gitops repo) to derive them from `insight-db-creds` + env values. Fix: either (a) compose them in a separate Helm hook job that ALWAYS runs, reading the db-creds Secret; or (b) document the engineer-side composition as the supported path. Tracked.
 - **Airbyte cross-namespace URL.** The chart's `insight.airbyte.url` helper currently uses `.Release.Namespace` (`insight`). In the layered model Airbyte runs in `insight-infra`, so analytics-api would 404 on real ingestion calls. Parameterise `airbyte.namespace` (or compute the FQDN from a values field). Tracked as a chart-side SPEC §8 follow-up.
 - **Cross-namespace host defaults for L2 services.** When `<svc>.deploy: false`, the chart still `required`-s `<svc>.host`. Default it to `<release>.insight-infra.svc.cluster.local` (the layered-model convention) so env values stay minimal. Tracked.
 - **Artifact signing (images + chart).** Neither images nor the chart are cosign-signed today. Plan: sign at publish time, `chart-present` verifies the chart signature before allowing deploy, image admission policy verifies signatures. See the [gitops SPEC §8 open items](../gitops/README.md#8-open-items).
-- **GHCR retention for old umbrella tags.** Long-lived production pins (`virtuozzo`, `constructor`, …) should mirror to a self-hosted registry against GHCR retention deleting the tagged artifact. Documented in the gitops SPEC §8.
+- **GHCR retention for old umbrella tags.** Long-lived production pins (customer envs) should mirror to a self-hosted registry against GHCR retention deleting the tagged artifact. Documented in the gitops SPEC §8.
 - **Migration to in-cluster ArgoCD.** The Makefile-driven manual deploy is an MVP shortcut for Cyberfabric SRE. The contract (one `values.yaml` per env, sealed secrets per namespace, `.insight-version` pin) is designed to survive a switch to an in-cluster ArgoCD picking up the same gitops repo; only the trigger mechanism changes from `make deploy` to ArgoCD reconciliation.
 
 **Open questions**:

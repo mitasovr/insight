@@ -271,7 +271,7 @@ Cyberfabric clusters are deployed from the private `infra/insight-gitops` reposi
 External consumers run the umbrella chart directly:
 
 ```bash
-helm install insight oci://ghcr.io/cyberfabric/charts/insight \
+helm install insight oci://ghcr.io/constructorfabric/charts/insight \
   --version <V> \
   --namespace insight --create-namespace \
   -f values.yaml
@@ -337,7 +337,7 @@ For local development (`dev-up.sh`) tags come from `.env.<name>`:
 
 | `.env` variable | Default | Description |
 |---|---|---|
-| `IMAGE_REGISTRY` | _(empty)_ | Registry prefix (e.g. `ghcr.io/cyberfabric`); empty for local-only Kind builds |
+| `IMAGE_REGISTRY` | _(empty)_ | Registry prefix (e.g. `ghcr.io/constructorfabric`); empty for local-only Kind builds |
 | `IMAGE_TAG` | `local` | Tag applied to all locally-built images |
 | `<SVC>_IMAGE_TAG` | `$IMAGE_TAG` | Per-service override (`API_GATEWAY_IMAGE_TAG`, …) |
 | `IMAGE_PULL_POLICY` | `IfNotPresent` | Kubernetes pullPolicy |
@@ -349,18 +349,18 @@ For cluster deployments image tags flow through automatically: the umbrella char
 
 | Image | Source repo | Tags |
 |---|---|---|
-| `insight-api-gateway` | `cyberfabric/insight` (this repo) | https://github.com/cyberfabric/insight/pkgs/container/insight-api-gateway |
-| `insight-analytics-api` | this repo | https://github.com/cyberfabric/insight/pkgs/container/insight-analytics-api |
-| `insight-identity` | this repo | https://github.com/cyberfabric/insight/pkgs/container/insight-identity |
-| `insight-toolbox` | this repo | https://github.com/cyberfabric/insight/pkgs/container/insight-toolbox |
-| `insight-front` | **separate** `cyberfabric/insight-front` | https://github.com/cyberfabric/insight/pkgs/container/insight-front |
-| `insight-jira-enrich` | **separate** `cyberfabric/insight-jira-enrich` | https://github.com/cyberfabric/insight/pkgs/container/insight-jira-enrich |
+| `insight-api-gateway` | `constructorfabric/insight` (this repo) | https://github.com/constructorfabric/insight/pkgs/container/insight-api-gateway |
+| `insight-analytics-api` | this repo | https://github.com/constructorfabric/insight/pkgs/container/insight-analytics-api |
+| `insight-identity` | this repo | https://github.com/constructorfabric/insight/pkgs/container/insight-identity |
+| `insight-toolbox` | this repo | https://github.com/constructorfabric/insight/pkgs/container/insight-toolbox |
+| `insight-front` | **separate** `constructorfabric/insight-front` | https://github.com/constructorfabric/insight/pkgs/container/insight-front |
+| `insight-jira-enrich` | **separate** `constructorfabric/insight-jira-enrich` | https://github.com/constructorfabric/insight/pkgs/container/insight-jira-enrich |
 
 > **Note**: frontend and jira-enrich live in their own repos with independent release cadences — a backend tag (e.g. `2026.04.28.10.34-b08b460`) does **not** exist for `insight-front`. Pick the latest tag in the frontend's repo separately.
 
 ### CI/CD
 
-GitHub Actions builds and pushes backend + toolbox container images on every merge to `main` (see [`.github/workflows/build-images.yml`](.github/workflows/build-images.yml)). Images are tagged `YYYY.MM.DD.HH.mm-<short-sha>` and `latest`. The same workflow publishes the umbrella Helm chart to `oci://ghcr.io/cyberfabric/charts/insight:<semver>` and auto-commits the version bumps back to `main`. See [ADR-0001](docs/components/deployment/specs/ADR/0001-chart-publishing-on-merge.md) for the publish-on-merge rationale and [`docs/components/deployment/gitops/README.md`](docs/components/deployment/gitops/README.md) for the gitops deploy contract.
+GitHub Actions builds and pushes backend + toolbox container images on every merge to `main` (see [`.github/workflows/build-images.yml`](.github/workflows/build-images.yml)). Images are tagged `YYYY.MM.DD.HH.mm-<short-sha>` and `latest`. The same workflow publishes the umbrella Helm chart to `oci://ghcr.io/constructorfabric/charts/insight:<semver>` and auto-commits the version bumps back to `main`. See [ADR-0001](docs/components/deployment/specs/ADR/0001-chart-publishing-on-merge.md) for the publish-on-merge rationale and [`docs/components/deployment/gitops/README.md`](docs/components/deployment/gitops/README.md) for the gitops deploy contract.
 
 To trigger manually: Actions → "Build & Push Container Images" → Run workflow.
 

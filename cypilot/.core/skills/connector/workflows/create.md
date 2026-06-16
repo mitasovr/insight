@@ -195,6 +195,13 @@ MUST NOT:
 - Put template strings in request params that collide with API datetime dialects. YouTrack `updated: ` expects ISO 8601 with `T` separator, no braces, no spaces. Jira JQL expects `"YYYY-MM-DD HH:MM"` with space, no T. Always run `source.sh check <tenant>` against a real instance to confirm.
 - Convert epoch-millisecond cursor fields via a transformation like `"{{ format_datetime(record['updated'] / 1000, '%Y-%m-%dT%H:%M:%S') }}"` in `AddedFieldDefinition.value`. The value does not reliably interpolate before `cursor.observe()` sees it, and you'll get a runtime error with the literal Jinja template as the cursor value. Use Airbyte's native `%ms` (or `%s`, `%s_as_float`, `%epoch_microseconds`) token in `DatetimeBasedCursor.cursor_datetime_formats` instead. See `src/ingestion/tools/declarative-connector/README.md` §"Epoch millisecond cursors" for the exact pattern.
 - Route substreams through nullable parent fields (e.g. `parent_key: id_readable` / `record.get('idReadable')`). Use the parent's stable internal id (`record['id']`, surfaced as `youtrack_id` etc.). A `null` from the API silently routes to `.../None/<endpoint>` which 404s and drops the entire partition.
+- Use a heavy stream (large per-record payloads, e.g. Jira `fields=*all` + `expand=names` ≈ 2 MB/response on ~1000-field instances) as a `SubstreamPartitionRouter` parent. The CDK **auto-caches every parent's HTTP responses in a SQLite requests-cache**; with multi-MB responses the cache balloons (observed: 226 MB after ~108 responses) and the read stalls silently — job stays "running", CPU busy, **0 records emitted, forever**. Instead, split roles: add a dedicated lightweight key-enumeration parent stream that requests a minimal field set (e.g. `fields: updated` — id/key arrive top-level for free) and point all children at it; keep the full-payload stream as a plain emitter (non-parent streams are not cached). This mirrors the official `source-jira` (`board_issues` parent uses `fields: ['key','created','updated']`; only the terminal `issues` emitter uses `*all`). Reference implementation: `jira_issue_keys` in `task-tracking/jira/connector.yaml`.
+
+- Set `concurrency_level.default_concurrency: 1`. With a single worker the concurrent CDK **self-deadlocks** once one sync generates ≥ ~10k partitions (the CDK futures limit): the only worker thread runs `generate_partitions` and throttles on "futures limit reached" (`partition_enqueuer.py`), while the partition-read futures it waits on have no other worker to run them. Symptom: CPU-busy spin, zero I/O, zero records, forever — and the records counter freezing at exactly 10000 is the fingerprint. Hit in production by jira (`jira_issue_history` full-window fan-out) and confluence (`wiki_page_versions`). Use `default_concurrency: 4` (verified: the same full-window run that deadlocked at 1 emitted 4208 records in 75 s at 4).
+
+Substream-parent rules (each one was a production incident):
+- Reconcile auto-selects **every** discovered stream (ADR-0015) — there is no "helper, don't sync it" escape for top-level streams. A lightweight parent defined at top level WILL land as a bronze table, so it MUST carry the standard `tenant_id`/`source_id`/`unique_key` stamp and have a `promote_bronze_to_rmt` line like every other stream. Alternative: define the parent **inline inside `partition_router.parent_stream_configs[].stream`** (see `_scrum_boards` inside jira's `jira_sprints`) — inline parents are invisible to `discover`, so no table appears; they are still response-cached, so keep them lightweight too.
+- The `cursor_field` of `DatetimeBasedCursor` is read from the **top level** of the emitted record. If the API nests it (Jira `/search/jql` returns `fields.updated`), hoist it via `AddFields` (`value: "{{ (record.get('fields') or {}).get('updated') }}"`) — otherwise the cursor never observes values and state never advances, silently re-reading the full window every sync.
 
 NOTE on integer-typed slots: Airbyte declarative CDK accepts BOTH integers AND Jinja-interpolated strings for `OffsetIncrement.page_size`, `CursorPagination.page_size`, and similar slots — `page_size: "{{ config.get('x_page_size', 100) }}"` is valid and recommended for config-driven pagination. (Earlier guidance in this file was wrong; the strict validator's "literal integer" rejection in our YouTrack work was a downstream symptom of a different `$ref` issue, not of templated page_size.)
 
@@ -327,6 +334,86 @@ Define source (bronze database) and model with tests:
 - `tenant_id`: not_null
 - `source_id`: not_null
 - `unique_key`: not_null, unique
+
+#### 3.6b Identity Resolution inputs (REQUIRED when the source exposes a user directory)
+
+If the connector has a stream that enumerates users **with emails** (or another
+person-identifying value like employee_id), it MUST feed Identity Resolution
+via the standard three-macro chain. Reference implementations:
+`collaboration/zoom`, `collaboration/zulip-proxy`, `hr-directory/bamboohr`,
+`hr-directory/ms-entra`, `wiki/outline`.
+
+```
+<users bronze table>
+  -> <name>__users_snapshot         snapshot() macro — SCD2, appends a row when
+                                    tracked columns change
+    -> <name>__users_fields_history fields_history() macro — one row per changed
+                                    field per version transition
+      -> <name>__identity_inputs    identity_inputs_from_history() macro —
+                                    UPSERT/DELETE observation rows, tagged
+                                    silver:identity_inputs
+        -> identity.identity_inputs silver/_shared/identity_inputs.sql unions
+                                    all contributors via union_by_tag
+```
+
+Three models to create (snake_case connector name):
+
+```sql
+-- dbt/<name>__users_snapshot.sql
+-- depends_on: {{ ref('<name>__bronze_promoted') }}
+{{ config(materialized='incremental', incremental_strategy='append',
+          schema='staging', tags=['<name>']) }}
+{{ snapshot(
+    source_ref=source('bronze_<name>', '<users_stream>'),
+    unique_key_col='unique_key',
+    check_cols=['<email_field>', '<display_name_field>', '<status_field>']
+) }}
+```
+
+```sql
+-- dbt/<name>__users_fields_history.sql
+{{ config(materialized='table', schema='staging', tags=['<name>', 'silver']) }}
+{{ fields_history(
+    snapshot_ref=ref('<name>__users_snapshot'),
+    entity_id_col='<source_user_id_col>',
+    fields=['<email_field>', '<display_name_field>', '<status_field>']
+) }}
+```
+
+```sql
+-- dbt/<name>__identity_inputs.sql
+{{ config(materialized='incremental', incremental_strategy='append',
+          schema='staging', tags=['<name>', 'silver', 'silver:identity_inputs']) }}
+{{ identity_inputs_from_history(
+    fields_history_ref=ref('<name>__users_fields_history'),
+    source_type='<name>',
+    identity_fields=[
+        {'field': '<email_field>', 'value_type': 'email',        'value_field_name': 'bronze_<name>.<users_stream>.<email_field>'},
+        {'field': '<name_field>',  'value_type': 'display_name', 'value_field_name': 'bronze_<name>.<users_stream>.<name_field>'},
+    ],
+    deactivation_condition="field_name = '<status_field>' AND lower(new_value) = '<inactive_value>'"
+) }}
+```
+
+Rules:
+- `entity_id_col` is the SOURCE-side stable user id (e.g. `user_id`, `id`) —
+  the macro emits the canonical `value_type='id'` binding row from it
+  automatically (ADR-0002); do NOT list it in `identity_fields`.
+- `check_cols` (snapshot) and `fields` (fields_history) must be the same list —
+  every field whose change should produce a history row. Booleans are fine:
+  `fields_history` stringifies via `toString()`, so a ClickHouse Bool becomes
+  `'true'`/`'false'` — compare with `lower(new_value) = 'true'` in
+  `deactivation_condition`.
+- The snapshot reads its source with `FINAL`, so the bronze table MUST already
+  be RMT-promoted (`<name>__bronze_promoted` + the `-- depends_on` header on
+  the snapshot model).
+- Add `-- depends_on: {{ ref('<name>__identity_inputs') }}` to
+  `src/ingestion/silver/_shared/identity_inputs.sql` so the first run
+  materialises the staging model before the shared union.
+- Document the chain and contributed value types in the connector README.
+- If the source exposes NO user directory (e.g. Confluence — author ids only,
+  no emails), skip this section and document in the README how identities
+  resolve instead (cross-connector JOIN, Silver Step 2 direct mapping).
 
 ### For CDK (`CONNECTOR_TYPE=cdk`):
 
@@ -533,6 +620,8 @@ Then read **each stream in isolation** — not just one combined read. `validate
 | `format_datetime(...)` inside `AddedFieldDefinition.value` for a cursor transformation | `ValueError: No format in [...] matching {{ format_datetime(record['x']/1000, ...) }}` — literal Jinja template stored as record value | Do not transform the cursor field. Use the native `%ms` / `%s` / `%s_as_float` / `%epoch_microseconds` tokens in `cursor_datetime_formats` to parse epoch values directly. |
 | `record.get('X', {}).get('Y')` when `record['X']` is present but `null` | `jinja2.exceptions.UndefinedError: 'None' has no attribute 'get'` — defaults on `.get()` only apply to **missing** keys, not `None` values | Replace with `(record.get('X') or {}).get('Y')`. Use the same pattern for every chain that may hit a nullable parent object. |
 | Source API query syntax (e.g. YouTrack `updated:`, Jira JQL, Salesforce SOQL) does not match your template | HTTP 400 `invalid_query` from the source | Never trust documentation alone — run `check` against a live tenant and inspect the generated URL. Each API has its own datetime dialect. See `src/ingestion/tools/declarative-connector/README.md` §"Datetime syntax pitfalls". |
+| Heavy `SubstreamPartitionRouter` parent (multi-MB responses, e.g. `fields=*all`) | `read` stalls **silently**: CPU stays busy, 0 records emitted for minutes/hours, no error. The parent's SQLite requests-cache (`/tmp/tmp*/<parent_stream>.sqlite` inside the runner) grows to hundreds of MB, then freezes | Split roles: lightweight key-enumeration parent (minimal `fields` request param) + full-payload emitter that is not a parent. Diagnose by watching the cache file size and records-emitted count during `read` — healthy parents stay in the KB range. |
+| `cursor_field` nested in the API response (e.g. Jira `fields.updated`) and not hoisted to the top level | No crash; first read looks fine, but no `STATE` cursor progress — every sync re-reads the full window (resume read returns the same count as the first read) | Add an `AddFields` hoist for the cursor field; include it in the inline schema (`required` if always present). |
 
 **Per-stream `read` pattern** (for thorough testing — saves the full catalog, swaps in single-stream catalog, resets state, runs `read`, captures the emitted `STATE`, then runs `read` a second time to verify cursor advancement). **Working directory: repo root** — the `INGESTION` variable below makes the script independent of `cd` location:
 
@@ -613,6 +702,7 @@ Acceptance criteria for each stream:
 - [ ] Error count = 0 in both runs (any `ERROR` / `FATAL` log message is a runtime bug — fix before deploy).
 - [ ] Every emitted record has `tenant_id`, `source_id`, `unique_key`.
 - [ ] For substreams, parent records are enumerated first and child records reference valid parent ids (use the parent's stable internal id field — e.g. `youtrack_id` from `record['id']` — for routing, NOT a nullable `record.get('idReadable')`-style field, since YouTrack/Jira can return `null` for human-readable IDs in some payloads).
+- [ ] Every `SubstreamPartitionRouter` parent requests a minimal field set; during a substream's `read`, the parent's SQLite requests-cache stays in the KB range (a cache growing to tens/hundreds of MB means a heavy parent — restructure before deploy, see MUST NOT list above).
 - [ ] For incremental streams, the **resume read** (second run, with the captured STATE persisted in `state.json`) returns a strict subset of the first-read records — usually zero. If the resume read returns the same count as the first read, the cursor is not advancing and the manifest is broken.
 
 If any stream fails, do NOT deploy. Fix the manifest and re-run both `validate-strict` and the per-stream `read`.

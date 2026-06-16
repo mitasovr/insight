@@ -47,5 +47,10 @@
 {% do promote_bronze_to_rmt(table='bronze_jira.jira_comments',      order_by='unique_key') %}
 {% do promote_bronze_to_rmt(table='bronze_jira.jira_worklogs',      order_by='unique_key') %}
 {% do promote_bronze_to_rmt(table='bronze_jira.jira_issue_history', order_by='unique_key') %}
+{# jira_issue_keys is the lightweight substream parent (issue key + updated
+   per issue). Reconcile (ADR-0015) auto-selects every discovered stream, so
+   it lands as a real bronze table and needs the same RMT dedup. No staging
+   model reads it — promotion only caps its growth. #}
+{% do promote_bronze_to_rmt(table='bronze_jira.jira_issue_keys',    order_by='unique_key') %}
 
 SELECT 1 AS promoted

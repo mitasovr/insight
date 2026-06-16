@@ -13,7 +13,7 @@
 #   INSIGHT_VALUES       single extra -f values.yaml (back-compat)
 #   INSIGHT_VALUES_FILES colon-separated list of -f values files, applied in order
 #   CHART_SOURCE         local | oci   (default: local — path to charts/insight)
-#   OCI_REF              OCI reference for the chart (default: oci://ghcr.io/cyberfabric/charts/insight)
+#   OCI_REF              OCI reference for the chart (default: oci://ghcr.io/constructorfabric/charts/insight)
 #
 # Usage:
 #   ./deploy/scripts/install-insight.sh
@@ -28,7 +28,7 @@ cd "$ROOT_DIR"
 NAMESPACE="${INSIGHT_NAMESPACE:-insight}"
 RELEASE="${INSIGHT_RELEASE:-insight}"
 CHART_SOURCE="${CHART_SOURCE:-local}"
-OCI_REF="${OCI_REF:-oci://ghcr.io/cyberfabric/charts/insight}"
+OCI_REF="${OCI_REF:-oci://ghcr.io/constructorfabric/charts/insight}"
 EXTRA_VALUES="${INSIGHT_VALUES:-}"
 EXTRA_VALUES_FILES="${INSIGHT_VALUES_FILES:-}"
 

@@ -2,7 +2,7 @@ namespace Insight.Identity.Infrastructure.MariaDb;
 
 /// <summary>
 /// SQL for the Phase-2 <c>POST /v1/profiles</c> endpoint
-/// (cyberfabric/cyber-insight#347).
+/// (constructorfabric/insight#347).
 ///
 /// All three queries share the canonical partition key per ADR-0003 +
 /// the identity-resolution data-model spec — the latest observation per

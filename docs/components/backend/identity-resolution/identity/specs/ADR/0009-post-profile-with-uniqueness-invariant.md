@@ -30,7 +30,7 @@ surface so analytics-frontend and internal workflows can resolve
 profiles by other identifier types (notably the source-native
 `value_type='id'` observation within a specific
 `(source_type, source_id)` instance, used by per-source workflows in
-cyberfabric/cyber-insight#344).
+constructorfabric/insight#344).
 
 The shape of the new endpoint must satisfy several constraints
 simultaneously:
@@ -68,7 +68,7 @@ simultaneously:
 - `POST /v1/profiles` with an array of lookups (batch) and a parallel
   array response.
 - `GET /v1/profiles?email=…&person_id=…` with query params (the
-  original cyberfabric/cyber-insight#347 spec).
+  original constructorfabric/insight#347 spec).
 - Multi-result list response (handler returns all matches, caller
   filters).
 
@@ -180,8 +180,8 @@ fields, missing tenant).
 
 ## More Information
 
-- cyberfabric/cyber-insight#347 — original Phase 2 issue (GET form).
-- cyberfabric/cyber-insight#344 — parent epic.
+- constructorfabric/insight#347 — original Phase 2 issue (GET form).
+- constructorfabric/insight#344 — parent epic.
 - Anton's review on PR #398 — POST + structured body suggestion.
 - ADR-0003 — latest-per-source-instance partition semantics.
 

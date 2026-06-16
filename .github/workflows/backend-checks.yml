@@ -1,11 +1,12 @@
 name: Backend Lint & Test
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/backend/**"
-      - ".github/workflows/backend-checks.yml"
+  # PR-only: every change touching the backend must pass these checks before
+  # it lands. Re-running the same suite on the merge commit just burns minutes
+  # — the PR already proved the tree is green, and branch protection ensures
+  # nothing reaches `main` without that PR. Use workflow_dispatch for an
+  # explicit manual rerun against `main` (e.g. after a runner-image rollover
+  # that might shift behaviour).
   pull_request:
     branches: [main]
     paths:
@@ -33,7 +34,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.92.0"
+          toolchain: "1.95.0"
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2

@@ -18,7 +18,7 @@ The curated values file at [`values.yaml`](./values.yaml) is the reference consu
 Two flavours, both supported by the chart:
 
 - **Single-namespace** (`dev-up.sh`): Airbyte, Argo Workflows, and the umbrella all live in `insight`. No cross-namespace service DNS, no Secret mirroring. Multiple Insight installs on a shared cluster simply use different namespaces.
-- **Layered (gitops L0/L2/L3)**: Airbyte lives in `insight-infra` (the L2 shared-infra namespace), the umbrella runs in `insight` with `airbyte.deploy: false`. The umbrella's `airbyte.namespace` value (when set; see [#408](https://github.com/cyberfabric/insight/issues/408)) tells the ingestion templates to reach across namespaces.
+- **Layered (gitops L0/L2/L3)**: Airbyte lives in `insight-infra` (the L2 shared-infra namespace), the umbrella runs in `insight` with `airbyte.deploy: false`. The umbrella's `airbyte.namespace` value (when set; see [#408](https://github.com/constructorfabric/insight/issues/408)) tells the ingestion templates to reach across namespaces.
 
 `controller.instanceID` on Argo scopes workflows to the matching Insight install — even on a shared cluster two tenants never pick up each other's workflows.
 

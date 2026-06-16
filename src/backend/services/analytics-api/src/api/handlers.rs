@@ -7,8 +7,8 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use modkit_canonical_errors::{CanonicalError, Problem};
 use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, EntityTrait, NotSet, QueryFilter, Set};
+use toolkit_canonical_errors::{CanonicalError, Problem};
 use uuid::Uuid;
 
 use super::AppState;
@@ -1503,8 +1503,7 @@ mod tests {
     }
 
     #[test]
-    fn inject_skips_bare_bronze_table_without_metric_date() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn inject_skips_bare_bronze_table_without_metric_date() {
         let from = "bronze_bamboohr.employees e \
                     LEFT JOIN insight.people p ON e.workEmail = p.email";
         let where_clause = " WHERE metric_date >= '2026-04-01'";
@@ -1514,7 +1513,6 @@ mod tests {
             inject_date_filter_into_subqueries(&normalised, where_clause).is_none(),
             "bronze leaf must be skipped (no metric_date column)"
         );
-        Ok(())
     }
 
     #[test]

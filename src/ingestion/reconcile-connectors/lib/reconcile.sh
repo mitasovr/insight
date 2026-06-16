@@ -872,7 +872,10 @@ reconcile_gc_orphans() {
   # @cpt-end:cpt-insightspec-algo-reconcile-gc-orphans:p2:inst-gc-conn-orphan
 
   # @cpt-begin:cpt-insightspec-algo-reconcile-gc-orphans:p2:inst-gc-src-loop
-  while IFS=$'\t' read -r conn_id src_id conn_name; do
+  # Re-delimit on US (\037) before reading: `IFS=$'\t' read` would coalesce empty
+  # fields (TAB is IFS-whitespace), so an orphan row with an empty conn_name (or
+  # any empty middle field) would shift columns and mis-target the deletion.
+  while IFS=$'\037' read -r conn_id src_id conn_name; do
     [[ -n "${conn_id}" ]] || continue
     if [[ "${RECONCILE_DRY_RUN:-0}" -eq 1 ]]; then  # RULE-DEFAULTS-OK: feature flag — OFF when caller doesn't opt in
       reconcile__log CHANGE "${conn_name}" \
@@ -885,7 +888,7 @@ reconcile_gc_orphans() {
         "garbage-collected orphan connection ${conn_id} and source ${src_id}"
       _RECONCILE_CHANGED=$((_RECONCILE_CHANGED + 1))
     fi
-  done <<<"${orphan_lines}"
+  done < <(printf '%s\n' "${orphan_lines}" | tr '\t' '\037')
   # @cpt-end:cpt-insightspec-algo-reconcile-gc-orphans:p2:inst-gc-src-loop
 }
 
@@ -1160,14 +1163,25 @@ reconcile_run() {
   local descriptors_tsv
   descriptors_tsv="$(disc_load_descriptors)"
 
-  while IFS=$'\t' read -r name connector_dir version type cdk_image enrich_image dbt_select; do
+  # NOTE: `IFS=$'\t' read` is WRONG for this TSV. TAB is IFS-whitespace, so bash
+  # COALESCES runs of tabs into a single delimiter and trims leading/trailing ones
+  # — i.e. empty fields silently disappear and every later column shifts left.
+  # The descriptor TSV has empty fields by design (cdk_image is empty for every
+  # nocode connector; enrich_image is empty for all but jira), so a row like
+  #   jira\t<dir>\t<ver>\tnocode\t<EMPTY cdk>\t<enrich>\t<dbt_select>
+  # would parse as cdk_image=<enrich>, enrich_image=<dbt_select>, dbt_select=''.
+  # That mis-feeds argo_apply_cronworkflow (enrich image := dbt selector) and
+  # bricks the jira enrich step. Re-delimit on US (\037, non-whitespace → no
+  # coalescing) so empty fields are preserved. Process substitution (not a pipe)
+  # keeps the loop in the current shell so _RECONCILE_* counters persist.
+  while IFS=$'\037' read -r name connector_dir version type cdk_image enrich_image dbt_select; do
     [[ -n "${name}" ]] || continue
     if ! _reconcile_one_connector "${name}" "${connector_dir}" "${version}" "${type}" "${cdk_image}" "${enrich_image}" "${dbt_select}" \
          "${opt_dry_run}" "${opt_no_sync_trigger}" "${opt_connector}"; then
       log_line ERROR "${name}: reconcile failed (continuing with next)"
       _RECONCILE_FAILED=$((_RECONCILE_FAILED + 1))
     fi
-  done <<<"${descriptors_tsv}"
+  done < <(printf '%s\n' "${descriptors_tsv}" | tr '\t' '\037')
   # shellcheck disable=SC2034
   : "${connector_dir:=}"  # silence unused-variable warning when no descriptors
 

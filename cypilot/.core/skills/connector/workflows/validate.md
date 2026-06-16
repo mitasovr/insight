@@ -27,7 +27,7 @@ If `validate-strict` passed, these are already satisfied automatically — but e
 
 - [ ] No whole-object `$ref` to `#/definitions/<X>` or `#/streams/<N>`. Only leaf-field `$ref` into `#/definitions/linked/<Component>/<field>` is allowed.
 - [ ] Every `AddFields.fields[]` item has `type: AddedFieldDefinition`.
-- [ ] `concurrency_level.default_concurrency` is a literal integer.
+- [ ] `concurrency_level.default_concurrency` is a literal integer **≥ 2** (with 1 worker the concurrent CDK self-deadlocks at ≥ ~10k partitions — futures-limit throttle with no free worker; fingerprint: records counter frozen at exactly 10000, CPU-busy, zero I/O).
 - [ ] `page_size` in `OffsetIncrement` / `CursorPagination` is either a literal integer OR a Jinja template like `"{{ config.get('x_page_size', 100) }}"` (both forms are accepted by the CDK and the Builder UI). Wire declared `*_page_size` config keys via the templated form so operator overrides take effect.
 - [ ] Schema `$schema` is `http://json-schema.org/schema#` (not draft-07).
 - [ ] Schema type arrays are `[type, "null"]`, not `["null", type]`.
@@ -43,6 +43,8 @@ If `validate-strict` passed, these are already satisfied automatically — but e
 - [ ] No `format_datetime(...)` call inside an `AddedFieldDefinition.value` used as a cursor source. That Jinja expression may not render, leaving the literal template as the cursor value. Use native `%ms` / `%s` / `%s_as_float` / `%epoch_microseconds` in `cursor_datetime_formats` to parse epoch values directly from the source field.
 - [ ] Every `record.get('X', {}).get('Y')` chain is replaced with `(record.get('X') or {}).get('Y')`. The `.get(key, default)` default only applies when the key is **missing**; it does NOT apply when the key is present with `null` value, and `None.get(...)` crashes the whole slice.
 - [ ] Source API query syntax has been verified against a real tenant via `source.sh check`. YouTrack, Jira JQL, Salesforce SOQL each have distinct datetime and operator dialects — template substitution can produce syntactically valid but semantically wrong queries that `validate-strict` cannot detect.
+- [ ] No `SubstreamPartitionRouter` parent is a heavy stream (e.g. `fields=*all` / multi-MB responses). The CDK auto-caches parent HTTP responses in SQLite; a heavy parent balloons the cache (observed: 226 MB → silent permanent stall, job "running" with 0 records). Parents must request a minimal field set (pattern: dedicated key-enumeration stream like jira's `jira_issue_keys`, or an inline parent like `_scrum_boards`).
+- [ ] Every `DatetimeBasedCursor.cursor_field` exists at the **top level** of the emitted record. If the API nests it (Jira `fields.updated`), an `AddFields` hoist is present — otherwise state never advances and every sync silently re-reads the full window (detectable: resume read returns the same count as the first read).
 
 ## Step 2c: Per-stream `read` smoke test (MANDATORY)
 
@@ -78,6 +80,7 @@ Read connector package files and verify each item:
 - [ ] InlineSchemaLoader has `additionalProperties: true`
 - [ ] Schema includes `tenant_id`, `source_id`, `unique_key` as string fields
 - [ ] Nullable types used only where API actually returns null (not all fields)
+- [ ] EVERY top-level stream — including lightweight substream parents added for cache hygiene — carries the full identity stamp and a `promote_bronze_to_rmt` line. Reconcile (ADR-0015) auto-selects every discovered stream, so "helper" top-level streams land as real bronze tables; without the stamp + RMT promotion they accumulate unbounded duplicates. Parent streams that must NOT become tables go inline inside `partition_router.parent_stream_configs[].stream` instead (invisible to discover).
 
 ### CDK (Python)
 - [ ] `parse_response()` injects `tenant_id`, `source_id`, `unique_key`
@@ -88,6 +91,7 @@ Read connector package files and verify each item:
 
 ### Descriptor
 - [ ] `name` matches directory name
+- [ ] `version` is bumped in the SAME PR as any `connector.yaml` change — reconcile republishes the nocode manifest only on descriptor-version drift (equal versions → noop), so a manifest edit without a bump silently never reaches Airbyte
 - [ ] `connection.namespace` = `bronze_<name>`
 - [ ] `dbt_select` includes connector tag with `+` suffix (e.g., `tag:m365+`)
 - [ ] `schedule` is valid cron expression
@@ -157,6 +161,18 @@ Read connector package files and verify each item:
 - [ ] SELECT includes `tenant_id`, `source_id`, `unique_key`
 - [ ] Uses `{{ source('bronze_<name>', '<stream>') }}`
 - [ ] Has `{% if is_incremental() %}` block
+
+### Identity Resolution inputs
+
+- [ ] If the connector ingests a user-directory stream with emails (or another
+  person-identifying value), the three-macro chain is present:
+  `<name>__users_snapshot` (snapshot) → `<name>__users_fields_history`
+  (fields_history) → `<name>__identity_inputs` (identity_inputs_from_history,
+  tagged `silver:identity_inputs`). See `connector-create.md` §3.6b.
+- [ ] `src/ingestion/silver/_shared/identity_inputs.sql` carries a
+  `-- depends_on: {{ ref('<name>__identity_inputs') }}` line for the connector.
+- [ ] If the source has NO user directory, the README documents the
+  alternative resolution path instead (e.g. Confluence → jira_user JOIN).
 
 ### dbt schema.yml
 - [ ] Source defined with `schema: bronze_<name>`

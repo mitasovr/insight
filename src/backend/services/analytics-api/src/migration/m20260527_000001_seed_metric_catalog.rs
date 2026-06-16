@@ -1,7 +1,7 @@
 //! Seed `metric_catalog` + `product-default` `metric_threshold` rows from
 //! the frontend's hardcoded metric metadata (Refs #523).
 //!
-//! Source files (read-only — see `cyberfabric/cyber-insight-front` `main`):
+//! Source files (read-only — see `constructorfabric/insight-front` `main`):
 //! - `src/api/threshold-config.ts` — `BULLET_DEFS`, `IC_KPI_DEFS`.
 //!
 //! Maps each FE `metric_key` to a real ClickHouse `<table>.<column>`:

@@ -19,7 +19,7 @@ on:
       - ".github/workflows/scripts/discover-image-matrix.py"
   workflow_dispatch:
     inputs:
-      # Cross-repo dispatch hook: cyberfabric/cyber-insight-front's CI sends
+      # Cross-repo dispatch hook: constructorfabric/insight-front's CI sends
       # the just-published frontend image tag here so the umbrella chart
       # bumps the frontend subchart appVersion to match. When set, ALL
       # backend image-build jobs are skipped (the dispatch carries no
@@ -40,11 +40,13 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/cyberfabric
+  IMAGE_PREFIX: ghcr.io/constructorfabric
 
 permissions:
-  contents: write   # publish-chart auto-commits Chart.yaml bumps back to main
-  packages: write   # publish-chart pushes the umbrella chart to GHCR
+  contents: write      # publish-chart auto-commits Chart.yaml bumps back to main
+  packages: write      # publish-chart pushes the umbrella chart to GHCR
+  id-token: write      # keyless OIDC identity for attest-build-provenance
+  attestations: write  # store SLSA provenance in the repo attestation store
 
 jobs:
   # ─── Backend / chart change detection ──────────────────────────────────────
@@ -104,7 +106,7 @@ jobs:
   # `images.<key>.image` in descriptor.yaml on every successful push without
   # `[skip ci]`, and that push re-triggers this workflow. If the descriptor
   # itself fired image rebuilds, we'd loop forever.
-  #
+  # 
   # `workflow_dispatch` with empty `frontend_tag` (legacy full-rebuild) emits
   # every entry; PR runs use the same path-filter logic as push runs.
   discover-images:
@@ -202,6 +204,7 @@ jobs:
             type=raw,value=${{ needs.changes.outputs.build_tag }},enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
       - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        id: build
         with:
           context: src/backend
           file: src/backend/services/api-gateway/Dockerfile
@@ -209,7 +212,20 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
+      # Keyless SLSA provenance: attests "this digest was built by THIS
+      # workflow at THIS commit" via the runner's short-lived OIDC identity —
+      # no stored signing keys. push-to-registry stores the attestation next
+      # to the image in GHCR (OCI referrer) so registry-only consumers
+      # (cluster admission controllers) can verify without GitHub API access.
+      # Verify: gh attestation verify oci://<image> --repo constructorfabric/insight
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/insight-api-gateway
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   backend-analytics-api:
     needs: changes
@@ -234,6 +250,7 @@ jobs:
             type=raw,value=${{ needs.changes.outputs.build_tag }},enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
       - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        id: build
         with:
           context: src/backend
           file: src/backend/services/analytics-api/Dockerfile
@@ -241,7 +258,15 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
+      # Keyless SLSA provenance — see backend-api-gateway for the contract.
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/insight-analytics-api
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   backend-identity:
     needs: changes
@@ -265,17 +290,29 @@ jobs:
           tags: |
             type=raw,value=${{ needs.changes.outputs.build_tag }},enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
-      # .NET 9 identity is self-contained — context is the service folder
-      # itself, not src/backend/ (no Cargo workspace membership).
+      # Context is src/backend/ (uniform with api-gateway + analytics-api)
+      # so the Dockerfile can reach src/backend/docker-entrypoint.sh —
+      # the shared ENABLE_AUTO_RELOAD-aware entrypoint added in the
+      # docker-compose dev path. Internal COPY paths inside the
+      # Dockerfile carry the `services/identity/` prefix accordingly.
       - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        id: build
         with:
-          context: src/backend/services/identity
+          context: src/backend
           file: src/backend/services/identity/Dockerfile
           push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
+      # Keyless SLSA provenance — see backend-api-gateway for the contract.
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/insight-identity
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   # ─── Toolbox build (with dbt parse smoke) ──────────────────────────────────
   # Toolbox is special — it bakes every connector's descriptor.yaml and dbt
@@ -323,7 +360,7 @@ jobs:
           push: false
           tags: insight-toolbox:ci-validate
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
 
       - name: Validate dbt project (dbt parse)
         # `dbt parse` exercises the dbt manifest: duplicate model/test
@@ -354,6 +391,7 @@ jobs:
             dbt parse --profiles-dir /profiles
 
       - name: Push toolbox image
+        id: push
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
@@ -363,6 +401,15 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+      # Keyless SLSA provenance — see backend-api-gateway for the contract.
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/insight-toolbox
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   # ─── Connector image build (matrix-driven, descriptor-discovered) ──────────
   # One matrix leg per `descriptor.yaml.images.<key>` entry that fires this
@@ -394,6 +441,7 @@ jobs:
             type=raw,value=${{ needs.changes.outputs.build_tag }},enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
       - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        id: build
         with:
           context: ${{ matrix.entry.connector_dir }}/${{ matrix.entry.context }}
           file:    ${{ matrix.entry.connector_dir }}/${{ matrix.entry.dockerfile }}
@@ -403,7 +451,15 @@ jobs:
           # Scope cache per image name so unrelated connectors don't evict
           # each other's layer cache.
           cache-from: type=gha,scope=${{ matrix.entry.name }}
-          cache-to:   type=gha,mode=max,scope=${{ matrix.entry.name }}
+          cache-to:   type=gha,mode=max,scope=${{ matrix.entry.name }},ignore-error=true
+      # Keyless SLSA provenance — see backend-api-gateway for the contract.
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/${{ matrix.entry.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   # ─── Connector descriptor bump ─────────────────────────────────────────────
   # After build-image succeeds on every matrix leg, patch each connector's
@@ -420,13 +476,30 @@ jobs:
   #
   # See ADR-0016 (descriptor.images: schema) and ADR-0001 (chart-publishing).
   bump-descriptors:
-    needs: [changes, discover-images, build-image]
+    needs:
+      - changes
+      - discover-images
+      - backend-api-gateway
+      - backend-analytics-api
+      - backend-identity
+      - toolbox
+      - build-image
+    # All siblings must finish first — bump-descriptors auto-commits to main
+    # and that push retriggers the workflow, so we must NOT pin descriptors
+    # while a backend service or toolbox is still building or has just failed
+    # tests. The `success || skipped` shape mirrors publish-chart: any of
+    # the backend/toolbox jobs may legitimately be `skipped` when `changes`
+    # didn't flag them, but they must never be `failure` or `cancelled`.
     if: |
       always()
       && github.event_name == 'push'
       && github.ref == 'refs/heads/main'
       && needs.discover-images.outputs.any == 'true'
       && needs.build-image.result == 'success'
+      && (needs.backend-api-gateway.result   == 'success' || needs.backend-api-gateway.result   == 'skipped')
+      && (needs.backend-analytics-api.result == 'success' || needs.backend-analytics-api.result == 'skipped')
+      && (needs.backend-identity.result      == 'success' || needs.backend-identity.result      == 'skipped')
+      && (needs.toolbox.result               == 'success' || needs.toolbox.result               == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       # `committed` is set to 'true' when this job actually pushed a
@@ -442,8 +515,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ secrets.INSIGHT_RELEASE_APP_ID }}
-          private-key: ${{ secrets.INSIGHT_RELEASE_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@v4
         with:
@@ -498,7 +571,7 @@ jobs:
           BUILD_TAG: ${{ needs.changes.outputs.build_tag }}
         run: |
           set -euo pipefail
-          git config user.email "ci@cyberfabric.local"
+          git config user.email "ci@constructorfabric.local"
           git config user.name  "insight-ci"
 
           # Stage every descriptor.yaml that was patched. `sort -u` because
@@ -544,7 +617,7 @@ jobs:
   # ─── Umbrella chart publish ────────────────────────────────────────────────
   # Per merge to main: bump subchart appVersions for whichever services were
   # rebuilt in this run, patch-bump the umbrella version, regenerate
-  # Chart.lock, package, push to oci://ghcr.io/cyberfabric/charts/insight,
+  # Chart.lock, package, push to oci://ghcr.io/constructorfabric/charts/insight,
   # and commit the bumps back to main with [skip ci] so we don't recurse.
   #
   # Skipped in this run when bump-descriptors committed (`committed=true`):
@@ -597,8 +670,8 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ secrets.INSIGHT_RELEASE_APP_ID }}
-          private-key: ${{ secrets.INSIGHT_RELEASE_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@v4
         with:
@@ -612,6 +685,30 @@ jobs:
         uses: azure/setup-helm@v4
         with:
           version: '3.14.0'
+
+      # Re-anchor the working tree to the live tip of the target branch
+      # BEFORE any value is computed. `checkout` above pins this run's
+      # trigger SHA, but the umbrella `version` is derived as
+      # (Chart.yaml version + 1) and `ingestion.toolboxImage` is rewritten
+      # to this run's build tag — both read from / written to the tree. If
+      # origin/main has advanced (an earlier release run already bumped &
+      # pushed; common when two src/ingestion/** PRs merge back-to-back),
+      # the trigger-SHA tree is stale: both runs compute the SAME next
+      # version and both rewrite the SAME toolboxImage line to a different
+      # tag. They both `helm push` that version (clobbering each other's
+      # OCI artifact), and the final commit can never fast-forward — the
+      # rebase-retry below then conflicts on the toolboxImage line in
+      # charts/insight/values.yaml (the version line auto-merges, identical
+      # on both sides) and cannot auto-resolve. Resetting to the live tip
+      # makes version-compute, the toolboxImage ref and the commit all
+      # consistent with what's on the branch, and makes a plain job re-run
+      # idempotent (a re-run recomputes against the refreshed tip instead
+      # of replaying the stale pinned SHA forever).
+      - name: Re-anchor to live branch tip
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$GITHUB_REF_NAME"
+          git reset --hard "origin/$GITHUB_REF_NAME"
 
       # Per-service subchart appVersion bumps. Each is bumped INDEPENDENTLY,
       # only if the matching image was rebuilt this run. Services whose
@@ -639,7 +736,7 @@ jobs:
           fi
 
       # Cross-repo frontend bump. The frontend lives in
-      # cyberfabric/cyber-insight-front and builds its own image; on
+      # constructorfabric/insight-front and builds its own image; on
       # publish-to-main its CI dispatches THIS workflow with frontend_tag
       # set to the just-built tag. We mirror that into the frontend
       # subchart's appVersion so the deploy path resolves the right image.
@@ -684,12 +781,25 @@ jobs:
           set -euo pipefail
           CURRENT="$(yq '.version' charts/insight/Chart.yaml)"
           NEXT="$(echo "$CURRENT" | awk -F. '{ printf "%d.%d.%d", $1, $2, $3+1 }')"
+          # yq v4 emits a `---` document separator between results when given
+          # multiple files (behaviour appeared with a runner yq update,
+          # 2026-06-08): without the filter below, `sort -V | tail -1` picks
+          # the separator and `appVersion: "---"` ships in the published
+          # chart — an invalid `app.kubernetes.io/version` label value that
+          # breaks every install (charts 0.1.48–0.1.55 were affected).
           NEW_APP=$(yq -r '.appVersion' \
             src/backend/services/api-gateway/helm/Chart.yaml \
             src/backend/services/analytics-api/helm/Chart.yaml \
             src/backend/services/identity/helm/Chart.yaml \
             src/frontend/helm/Chart.yaml \
+            | grep -Ev '^(---|null)$' \
             | sort -V | tail -1)
+          # Fail loud unless the result is a build tag (YYYY.MM.DD.HH.MM-sha):
+          # a malformed appVersion must never reach a published chart again.
+          if ! echo "$NEW_APP" | grep -Eq '^[0-9]{4}(\.[0-9]{2}){4}-[0-9a-f]{7}$'; then
+            echo "ERROR: computed umbrella appVersion '$NEW_APP' is not a valid build tag" >&2
+            exit 1
+          fi
           echo "Umbrella version $CURRENT → $NEXT (appVersion → $NEW_APP)"
           yq -i ".version = \"$NEXT\""        charts/insight/Chart.yaml
           yq -i ".appVersion = \"$NEW_APP\""  charts/insight/Chart.yaml
@@ -715,9 +825,41 @@ jobs:
             | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Helm push
+        id: helm_push
         run: |
-          helm push "dist/insight-${{ steps.umbrella.outputs.version }}.tgz" \
-            oci://ghcr.io/cyberfabric/charts
+          set -euo pipefail
+          OUT="$(helm push "dist/insight-${{ steps.umbrella.outputs.version }}.tgz" \
+            oci://ghcr.io/constructorfabric/charts 2>&1)"
+          echo "$OUT"
+          # helm push prints "Digest: sha256:..." — that digest is the chart's
+          # OCI manifest identity, which the attestation below binds to.
+          DIGEST="$(echo "$OUT" | sed -n 's/^Digest: //p')"
+          if [ -z "$DIGEST" ]; then
+            echo "ERROR: could not parse chart digest from helm push output" >&2
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # attest-build-provenance with push-to-registry reads DOCKER credentials
+      # (~/.docker/config.json) — `helm registry login` above writes to helm's
+      # own config, which the attest action cannot see. Without this login the
+      # attest step dies with "No credentials found for registry ghcr.io".
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Keyless SLSA provenance for the umbrella chart OCI artifact — same
+      # contract as the image attestations (see backend-api-gateway). Verify:
+      #   gh attestation verify oci://ghcr.io/constructorfabric/charts/insight:<ver> \
+      #     --repo constructorfabric/insight
+      - name: Attest chart provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/constructorfabric/charts/insight
+          subject-digest: ${{ steps.helm_push.outputs.digest }}
+          push-to-registry: true
 
       - name: Commit version bumps back to main
         env:
@@ -725,7 +867,7 @@ jobs:
           BUILD_TAG: ${{ needs.changes.outputs.build_tag }}
         run: |
           set -euo pipefail
-          git config user.email "ci@cyberfabric.local"
+          git config user.email "ci@constructorfabric.local"
           git config user.name  "insight-ci"
 
           git add charts/insight/Chart.yaml \
@@ -753,16 +895,18 @@ jobs:
           # detected on the subsequent run.
           git commit -m "chore(release): umbrella ${UMBRELLA_VERSION} (build ${BUILD_TAG}) [skip ci]"
 
-          # Push, with one rebase-retry to absorb a race against
-          # origin/${GITHUB_REF_NAME} advancing between job start and now.
-          # Mirrors the gitops poller's policy: rebase once, fail loud on
-          # second failure.
+          # We re-anchored to the live branch tip at job start and runs are
+          # serialised per-ref (see the workflow `concurrency` block), so this
+          # push is expected to fast-forward. Do NOT rebase the bump commit on
+          # failure: the only way the tip moves under us now is a direct human
+          # push to ${GITHUB_REF_NAME}, and rebasing our bump onto it conflicts
+          # on the values.yaml lines we just edited (toolboxImage) —
+          # unresolvable in CI. Fail loud instead; a plain job re-run is
+          # idempotent (it recomputes against the refreshed tip, see
+          # "Re-anchor" above).
           if ! git push origin "HEAD:${GITHUB_REF_NAME}"; then
-            echo "push failed; rebasing onto refreshed origin/${GITHUB_REF_NAME} and retrying"
-            if ! git pull --rebase origin "${GITHUB_REF_NAME}"; then
-              echo "rebase failed (conflict on bumped files?); aborting"
-              git rebase --abort 2>/dev/null || true
-              exit 1
-            fi
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            echo "push to ${GITHUB_REF_NAME} was rejected — the branch tip moved" >&2
+            echo "after re-anchor (a direct human push?). Re-run this job to" >&2
+            echo "recompute the bump against the new tip." >&2
+            exit 1
           fi

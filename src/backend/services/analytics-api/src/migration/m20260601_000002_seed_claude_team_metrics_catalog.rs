@@ -1,5 +1,5 @@
 //! Seed `metric_catalog` + `product-default` `metric_threshold` rows for
-//! the three new Claude Team metric_keys introduced in
+//! the three new Claude Team `metric_keys` introduced in
 //! `m20260601_000001_ai_claude_team_metrics` (INSIGHT-458).
 //!
 //! New keys (all routed through `insight.ai_bullet_rows`):
@@ -15,18 +15,18 @@
 //! ⚠️  FE visibility note: these three keys are backend-computed and stored
 //! in the catalog to register their label / unit / threshold metadata.
 //! They will not appear in the UI until the corresponding `BULLET_DEFS`
-//! entries are added to `cyber-insight-front` (tracked as a follow-up to
+//! entries are added to `insight-front` (tracked as a follow-up to
 //! INSIGHT-458). The catalog rows are a prerequisite, not a substitute, for
 //! that work.
 //!
 //! Threshold placeholders: initial `good` / `warn` values are estimates for
 //! an active developer. Adjust per-tenant via the admin CRUD API (#525).
 //!
-//!   cc_cost      — good ≤ 5000 ¢ ($50) / warn ≤ 10000 ¢ ($100) per period.
-//!   prs_with_cc  — good ≥ 3 / warn ≥ 1 PRs with CC attribution per period.
-//!   prs_total    — good ≥ 5 / warn ≥ 2 PRs per period (context denominator).
+//!   `cc_cost`      — good ≤ 5000 ¢ ($50) / warn ≤ 10000 ¢ ($100) per period.
+//!   `prs_with_cc`  — good ≥ 3 / warn ≥ 1 PRs with CC attribution per period.
+//!   `prs_total`    — good ≥ 5 / warn ≥ 2 PRs per period (context denominator).
 //!
-//! Three FE-visible metric_keys from m20260527 remain at 69 rows. This
+//! Three FE-visible `metric_keys` from m20260527 remain at 69 rows. This
 //! migration adds 3 more for a running catalog total of 72.
 
 use sea_orm::{ConnectionTrait, Statement, Value};
@@ -221,7 +221,7 @@ mod tests {
     use super::*;
 
     /// Pins the number of new catalog rows shipped by this migration.
-    /// Update if Claude Team gains new metric_keys in a future migration.
+    /// Update if Claude Team gains new `metric_keys` in a future migration.
     #[test]
     fn seed_count_is_three() {
         assert_eq!(
@@ -231,7 +231,7 @@ mod tests {
         );
     }
 
-    /// All three metric_keys must route to `ai_bullet_rows` (not a typo
+    /// All three `metric_keys` must route to `ai_bullet_rows` (not a typo
     /// like `ai_bullet_row` or a different table segment).
     #[test]
     fn all_keys_route_to_ai_bullet_rows() {
@@ -244,21 +244,21 @@ mod tests {
         }
     }
 
-    /// cc_cost is a spending signal — higher values mean more cost.
+    /// `cc_cost` is a spending signal — higher values mean more cost.
     /// `higher_is_better` must be `false`.
     #[test]
     fn cc_cost_is_lower_is_better() {
         let row = SEEDS
             .iter()
             .find(|r| r.metric_key == "ai_bullet_rows.cc_cost")
-            .expect("cc_cost row must be in SEEDS");
+            .unwrap_or_else(|| panic!("cc_cost row must be in SEEDS"));
         assert!(
             !row.higher_is_better,
             "cc_cost is a cost metric — higher_is_better must be false"
         );
     }
 
-    /// prs_with_cc and prs_total are activity counters — more is better.
+    /// `prs_with_cc` and `prs_total` are activity counters — more is better.
     #[test]
     fn prs_keys_are_higher_is_better() {
         for key in ["ai_bullet_rows.prs_with_cc", "ai_bullet_rows.prs_total"] {
@@ -287,7 +287,7 @@ mod tests {
         }
     }
 
-    /// No duplicate metric_keys within this migration's SEEDS slice.
+    /// No duplicate `metric_keys` within this migration's SEEDS slice.
     #[test]
     fn no_duplicate_metric_keys() {
         use std::collections::HashSet;
@@ -301,7 +301,7 @@ mod tests {
         }
     }
 
-    /// source_tags JSON must be a well-formed JSON array string.
+    /// `source_tags` JSON must be a well-formed JSON array string.
     #[test]
     fn source_tags_json_is_well_formed() {
         for row in SEEDS {

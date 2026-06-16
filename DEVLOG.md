@@ -2,7 +2,7 @@
 
 **Purpose**: full narrative of the first-run debugging of `./dev-up.sh` on a clean Kind cluster, after the umbrella / canonical-installer refactor (PR #224).
 
-**Worktree**: `/Users/roman/alemira/insight/.claude/worktrees/laughing-feistel-fe1e16`
+**Worktree**: `.claude/worktrees/laughing-feistel-fe1e16`
 **Branch**: `claude/laughing-feistel-fe1e16`
 **Start**: 2026-04-23
 
@@ -63,7 +63,7 @@ kind delete cluster --name insight
 
 **Diagnosis**:
 - Host is `arm64` (Apple Silicon).
-- `ghcr.io/cyberfabric/insight-front:latest` publishes only `linux/amd64`.
+- `ghcr.io/constructorfabric/insight-front:latest` publishes only `linux/amd64`.
 - `docker pull` without `--platform` on arm64 host with amd64-only image refuses and returns exit 1, aborting the script.
 - Docker Desktop ships with QEMU binfmt registration that lets amd64 containers run on arm64, but the pull requires an explicit `--platform linux/amd64`.
 
@@ -130,7 +130,7 @@ argo-workflows/templates/controller/workflow-controller-config-map.yaml:15:18
 
 ## 6. Frontend `ImagePullBackOff` on Apple Silicon
 
-**Observation**: umbrella installed, but `insight-frontend` pod kept looping `ImagePullBackOff`. `ghcr.io/cyberfabric/insight-front:latest` publishes only `linux/amd64`.
+**Observation**: umbrella installed, but `insight-frontend` pod kept looping `ImagePullBackOff`. `ghcr.io/constructorfabric/insight-front:latest` publishes only `linux/amd64`.
 
 **Diagnosis chain**:
 1. `docker pull --platform linux/amd64` on arm64 host → pulls fine into Docker Desktop local store.

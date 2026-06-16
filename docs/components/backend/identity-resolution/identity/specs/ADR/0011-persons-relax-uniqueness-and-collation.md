@@ -24,7 +24,7 @@
 ## Context and Problem Statement
 
 Two latent defects in the `persons` schema surfaced while implementing
-the `person_parent_map` cache (cyberfabric/cyber-insight#348 Phase 1
+the `person_parent_map` cache (constructorfabric/insight#348 Phase 1
 in PR #477).
 
 **Defect A — UNIQUE on `value_hash` silently drops state transitions.**
@@ -226,7 +226,7 @@ Confirmed by integration tests in
 
 ## More Information
 
-- cyberfabric/cyber-insight#477 — the person_parent_map PR where both
+- constructorfabric/insight#477 — the person_parent_map PR where both
   defects surfaced.
 - ADR-0002 — Read From the MariaDB `persons` Table; the original
   schema decision this ADR amends.

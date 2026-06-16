@@ -96,9 +96,9 @@ mod tests {
     #[test]
     fn custom_timeout() {
         let cfg =
-            Config::new("http://ch:8123", "insight").with_query_timeout(Duration::from_secs(60));
+            Config::new("http://ch:8123", "insight").with_query_timeout(Duration::from_mins(1));
 
-        assert_eq!(cfg.query_timeout, Some(Duration::from_secs(60)));
+        assert_eq!(cfg.query_timeout, Some(Duration::from_mins(1)));
     }
 
     #[test]

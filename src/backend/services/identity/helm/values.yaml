@@ -3,7 +3,7 @@ replicaCount: 1
 podAnnotations: {}
 
 image:
-  repository: ghcr.io/cyberfabric/insight-identity
+  repository: ghcr.io/constructorfabric/insight-identity
   tag: ""
   pullPolicy: IfNotPresent
 

@@ -7,7 +7,7 @@
 //!    `id` (UUIDv7) is still the stable lookup key consumers MUST use; `metric_key`
 //!    is additive and exists so the FE can align its compiled-in `BULLET_DEFS`
 //!    constants to wire rows during the catalog-hydration transitional release
-//!    (cyberfabric/cyber-insight-front#66). Once the FE deletes those constants,
+//!    (constructorfabric/insight-front#66). Once the FE deletes those constants,
 //!    `metric_key` keeps the documented additive-field stability contract.
 //! 2. **`bounded_by_lock` is a separate field from `resolved_from`.** `resolved_from`
 //!    names the row that won the walk; `bounded_by_lock` is `true` iff the walk

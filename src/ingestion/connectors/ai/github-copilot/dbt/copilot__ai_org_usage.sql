@@ -9,7 +9,7 @@
 -- materialised.
 --
 -- Activation steps (tracked under PRD OQ-COP-2):
---   1. File a GitHub issue under cyberfabric/insight to track the new
+--   1. File a GitHub issue under constructorfabric/insight to track the new
 --      Silver class creation.
 --   2. Create `silver/ai/class_ai_org_usage.sql` with
 --      `engine='ReplacingMergeTree(_version)'` and

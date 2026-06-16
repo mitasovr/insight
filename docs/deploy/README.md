@@ -1,8 +1,8 @@
 # Insight GitOps — Sample Starter
 
-A clone-and-adapt template for deploying [Insight](https://github.com/cyberfabric/cyber-insight)
+A clone-and-adapt template for deploying [Insight](https://github.com/constructorfabric/insight)
 into a Kubernetes cluster. The umbrella Helm chart is published from the
-public Insight repo to `oci://ghcr.io/cyberfabric/charts/insight` per
+public Insight repo to `oci://ghcr.io/constructorfabric/charts/insight` per
 merge to `main`; this directory holds everything else — values
 overlays, sealed-secret manifests, the Makefile, and a few helper
 scripts.
@@ -151,7 +151,7 @@ make system-status       ENV=local   # what's installed in insight-infra
 # Before the first `make deploy`: edit `environments/local/values.yaml`
 # and replace the `REPLACE_WITH_LATEST_*_TAG` placeholders with concrete
 # image tags. The umbrella chart's appVersion is the canonical source —
-# check the tag on `oci://ghcr.io/cyberfabric/charts/insight:<.insight-version>`
+# check the tag on `oci://ghcr.io/constructorfabric/charts/insight:<.insight-version>`
 # or peek at GHCR directly.
 make diff   ENV=local                # inspect what would change
 make deploy ENV=local
@@ -232,7 +232,7 @@ commit.
 ## Chart-pin flow (L3)
 
 1. The public Insight repo's CI publishes umbrella chart versions to
-   `oci://ghcr.io/cyberfabric/charts/insight:<semver>` per merge to
+   `oci://ghcr.io/constructorfabric/charts/insight:<semver>` per merge to
    `main`. See
    [`../components/deployment/specs/ADR/0001-chart-publishing-on-merge.md`](../components/deployment/specs/ADR/0001-chart-publishing-on-merge.md)
    for the contract.
@@ -251,7 +251,7 @@ it's CI-vendor-specific. The pattern is:
 1. List semver tags at the chart registry on a cron schedule (e.g.
    hourly):
    ```bash
-   skopeo list-tags docker://ghcr.io/cyberfabric/charts/insight \
+   skopeo list-tags docker://ghcr.io/constructorfabric/charts/insight \
      | jq -r '.Tags[]' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
    ```
 2. If the highest tag is newer than `.insight-version`, write it and

@@ -34,6 +34,10 @@ mod m20260605_000001_member_prs_metric;
 mod m20260606_000001_dept_metric_distributions;
 mod m20260606_000002_dept_kpi_distribution;
 mod m20260606_000003_team_bullet_blended_dept;
+mod m20260609_000001_ai_chatgpt_team_metrics;
+mod m20260609_000002_seed_chatgpt_team_metrics_catalog;
+mod m20260610_000001_fix_ai_label_drift;
+mod m20260611_000001_ai_bullet_dept_reconcile;
 
 #[cfg(test)]
 mod live_tests;
@@ -80,6 +84,11 @@ impl MigratorTrait for Migrator {
             Box::new(m20260606_000001_dept_metric_distributions::Migration),
             Box::new(m20260606_000002_dept_kpi_distribution::Migration),
             Box::new(m20260606_000003_team_bullet_blended_dept::Migration),
+            Box::new(m20260609_000001_ai_chatgpt_team_metrics::Migration),
+            Box::new(m20260609_000002_seed_chatgpt_team_metrics_catalog::Migration),
+            Box::new(m20260610_000001_fix_ai_label_drift::Migration),
+            Box::new(m20260611_000001_ai_bullet_dept_reconcile::Migration),
+
         ]
     }
 }

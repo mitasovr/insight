@@ -12,7 +12,7 @@
 # Effect: every connector with an `images.<key>` entry under
 # `src/ingestion/connectors/*/*/descriptor.yaml` gets:
 #   1. its image built from the declared `context` + `dockerfile`
-#   2. its image pushed to `ghcr.io/cyberfabric/<images.<key>.name>:<BUILD_TAG>`
+#   2. its image pushed to `ghcr.io/constructorfabric/<images.<key>.name>:<BUILD_TAG>`
 #   3. its `descriptor.yaml.images.<key>.image` patched with the new ref
 #
 # The script DOES NOT commit, push, or create a PR — it leaves the working
@@ -112,7 +112,7 @@ echo "GitHub user: ${GH_USER}"
 # ─── GHCR login (no-op if already logged in with the same token) ──────────
 
 REGISTRY="ghcr.io"
-IMAGE_PREFIX="ghcr.io/cyberfabric"
+IMAGE_PREFIX="ghcr.io/constructorfabric"
 
 if [[ "${PUSH}" == "true" && "${DRY_RUN}" == "false" ]]; then
   echo "Logging into ${REGISTRY} via gh auth token..."
