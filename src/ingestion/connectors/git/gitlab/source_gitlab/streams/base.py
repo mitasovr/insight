@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import requests
-from airbyte_cdk.models import SyncMode
+from airbyte_cdk.models import AirbyteMessage, SyncMode
 from airbyte_cdk.sources.streams.http import HttpStream
 
 _API_PREFIX = "/api/v4/"
@@ -185,6 +185,21 @@ class GitlabStream(HttpStream, ABC):
         records = data if isinstance(data, list) else [data]
         for record in records:
             yield self._envelope(record, stream_slice)
+
+    def read_records(
+        self,
+        sync_mode: SyncMode,
+        cursor_field: list[str] | None = None,
+        stream_slice: Mapping[str, Any] | None = None,
+        stream_state: Mapping[str, Any] | None = None,
+    ) -> Iterable[Mapping[str, Any] | AirbyteMessage]:
+        yield from self._read_pages(
+            lambda _request, response, state, slice_: self.parse_response(
+                response, stream_slice=slice_, stream_state=state
+            ),
+            stream_slice,
+            stream_state,
+        )
 
     def _should_skip(
         self,
