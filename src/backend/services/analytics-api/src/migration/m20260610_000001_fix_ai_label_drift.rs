@@ -214,7 +214,10 @@ mod tests {
     #[test]
     fn cc_overage_sums_like_cc_cost() {
         assert!(SUM_KEYS.contains(&"cc_overage"), "cc_overage must sum");
-        assert!(!MAX_KEYS.contains(&"cc_overage"), "cc_overage is not an active flag");
+        assert!(
+            !MAX_KEYS.contains(&"cc_overage"),
+            "cc_overage is not an active flag"
+        );
         assert!(
             BULLET_ROWS_KEYS.contains(&"cc_overage"),
             "cc_overage must be listed as an emitted gold key"

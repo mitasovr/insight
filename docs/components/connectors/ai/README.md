@@ -198,7 +198,7 @@ Goal: each class is one **product domain** with a homogeneous schema. No NULL-pa
 
 ## Proposed structure (6 core + 2 optional classes)
 
-```
+```text
 silver/
 ├── ai/
 │   ├── class_ai_dev_usage         (per-person-day code activity)
@@ -330,7 +330,7 @@ provider, source, data_source, collected_at
 **Why separate from `class_ai_cost`:** `class_ai_cost` answers *"how much did the org/project spend"* (financial line items, per-project/day, not attributable to a person). `class_ai_overage` answers *"how much did **each person** spend **above their own monthly limit**"* — a per-seat budget-vs-actual comparison. Overage needs a per-seat **limit** that cost line items don't carry, and is the metric product asked for ("сколько денег человек потратил свыше лимита"). Keeping it separate avoids smearing a per-person limit column across the org-grain cost class.
 
 **Schema (19 positional cols — first contributor `claude_team__ai_overage` defines the contract; vendor extras → `overage_metrics_json`, never new columns):**
-```
+```text
 insight_tenant_id, source_id, unique_key, email, account_id
 period_month, tool, seat_tier, currency
 credit_limit_cents, used_amount_cents, overage_cents   -- minor units (cents); overage = max(0, used − limit), honest-NULL if no limit

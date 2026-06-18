@@ -50,7 +50,11 @@ WITH latest_per_seat_month AS (
       AND account_email IS NOT NULL
       AND trim(account_email) != ''
     ORDER BY _airbyte_extracted_at DESC
-    LIMIT 1 BY account_uuid, toStartOfMonth(_airbyte_extracted_at)
+    -- Dedup on the FULL grain (tenant + source + seat + month), not just
+    -- account_uuid: a multi-tenant / multi-instance bronze_claude_team can hold
+    -- the same account_uuid under different tenant_id/source_id in one month,
+    -- and keying on account_uuid alone would drop those as false duplicates.
+    LIMIT 1 BY tenant_id, source_id, account_uuid, toStartOfMonth(_airbyte_extracted_at)
 )
 
 SELECT

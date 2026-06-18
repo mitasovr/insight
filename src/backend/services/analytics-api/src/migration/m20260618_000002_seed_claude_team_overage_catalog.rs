@@ -173,7 +173,11 @@ mod tests {
 
     #[test]
     fn seed_count_is_one() {
-        assert_eq!(SEEDS.len(), 1, "expected exactly 1 new catalog row (cc_overage)");
+        assert_eq!(
+            SEEDS.len(),
+            1,
+            "expected exactly 1 new catalog row (cc_overage)"
+        );
     }
 
     #[test]
