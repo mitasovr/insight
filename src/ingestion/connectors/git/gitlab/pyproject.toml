@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Airbyte source connector for self-hosted GitLab (CDK, typed)"
 requires-python = ">=3.10"
 dependencies = [
-    "airbyte-cdk>=7.21.1",
-    "requests>=2.32.0",
+    "airbyte-cdk>=7.23.1",
+    "requests>=2.34.2",
 ]
 
 [project.optional-dependencies]
