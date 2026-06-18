@@ -53,7 +53,10 @@ SELECT
     'insight_gitlab' AS data_source,
     toUnixTimestamp64Milli(now64()) AS _version,
     mr._airbyte_extracted_at
-FROM {{ source('bronze_gitlab', 'merge_requests') }} AS mr
+-- FINAL: collapse RMT bronze to one row per merge request before staging, so
+-- a transient pre-merge duplicate cannot tie the class dedup and let stale MR
+-- state (e.g. an old OPEN row) win over the latest.
+FROM {{ source('bronze_gitlab', 'merge_requests') }} AS mr FINAL
 LEFT JOIN proj AS p
     ON p.project_id = mr.project_id
     AND p.tenant_id = mr.tenant_id

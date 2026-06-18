@@ -40,7 +40,7 @@ SELECT
     'insight_gitlab' AS data_source,
     toUnixTimestamp64Milli(now64()) AS _version,
     n._airbyte_extracted_at
-FROM {{ source('bronze_gitlab', 'merge_request_notes') }} AS n
+FROM {{ source('bronze_gitlab', 'merge_request_notes') }} AS n FINAL
 LEFT JOIN proj AS p
     ON p.project_id = n.project_id
     AND p.tenant_id = n.tenant_id

@@ -33,7 +33,7 @@ SELECT
     'insight_gitlab' AS data_source,
     toUnixTimestamp64Milli(now64()) AS _version,
     b._airbyte_extracted_at
-FROM {{ source('bronze_gitlab', 'branches') }} AS b
+FROM {{ source('bronze_gitlab', 'branches') }} AS b FINAL
 LEFT JOIN proj AS p
     ON p.project_id = b.project_id
     AND p.tenant_id = b.tenant_id

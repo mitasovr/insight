@@ -33,7 +33,7 @@ SELECT
     'insight_gitlab' AS data_source,
     toUnixTimestamp64Milli(now64()) AS _version,
     _airbyte_extracted_at
-FROM {{ source('bronze_gitlab', 'projects') }}
+FROM {{ source('bronze_gitlab', 'projects') }} FINAL
 {% if is_incremental() %}
 WHERE _airbyte_extracted_at > (SELECT max(_airbyte_extracted_at) FROM {{ this }})
 {% endif %}

@@ -43,7 +43,7 @@ SELECT
     'insight_gitlab' AS data_source,
     toUnixTimestamp64Milli(now64()) AS _version,
     a._airbyte_extracted_at
-FROM {{ source('bronze_gitlab', 'merge_request_approvals') }} AS a
+FROM {{ source('bronze_gitlab', 'merge_request_approvals') }} AS a FINAL
 ARRAY JOIN JSONExtractArrayRaw(COALESCE(toString(a.approved_by), '[]')) AS rv
 LEFT JOIN proj AS p
     ON p.project_id = a.project_id
