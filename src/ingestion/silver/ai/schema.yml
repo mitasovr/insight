@@ -423,15 +423,23 @@ models:
       - name: seat_tier
         description: "Vendor plan/seat tier (free text per vendor). NULL when not exposed."
       - name: currency
-        description: "ISO currency of the *_cents monetary columns (e.g. 'USD')."
+        description: >
+          ISO currency of the *_cents monetary columns. 'USD' today (both
+          Claude Team and OpenAI bill in USD); extend accepted_values when a
+          non-USD billing tenant first appears.
         tests:
           - not_null
+          - accepted_values:
+              arguments:
+                values: ['USD']
       - name: credit_limit_cents
         description: >
           Monthly spend/credit limit in minor units (cents). NULL when no limit
           applies or the limit is unknown for the source.
       - name: used_amount_cents
         description: "Spend so far in the period, in minor units (cents)."
+        tests:
+          - not_null
       - name: overage_cents
         description: >
           Spend beyond the limit: max(0, used_amount_cents - credit_limit_cents).

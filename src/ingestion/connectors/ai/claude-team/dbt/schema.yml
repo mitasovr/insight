@@ -174,9 +174,12 @@ models:
       - name: seat_tier
         description: "Vendor plan tier (team_standard / team_tier_1 / unassigned / …)"
       - name: currency
-        description: "ISO currency of the *_cents amounts — 'USD' for Claude Team"
+        description: "ISO currency of the *_cents amounts — 'USD' for Claude Team (Anthropic bills Team plans in USD)"
         tests:
           - not_null
+          - accepted_values:
+              arguments:
+                values: ['USD']
       - name: credit_limit_cents
         description: >
           Monthly credit limit in cents (monthly_credit_limit, already minor
