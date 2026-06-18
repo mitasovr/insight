@@ -27,6 +27,8 @@ mod m20260610_000001_fix_ai_label_drift;
 mod m20260612_000001_support_metrics;
 mod m20260612_000002_seed_support_catalog;
 mod m20260612_000003_link_support_query_catalog;
+mod m20260618_000001_ai_claude_team_overage_metric;
+mod m20260618_000002_seed_claude_team_overage_catalog;
 
 #[cfg(test)]
 mod live_tests;
@@ -66,6 +68,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260612_000001_support_metrics::Migration),
             Box::new(m20260612_000002_seed_support_catalog::Migration),
             Box::new(m20260612_000003_link_support_query_catalog::Migration),
+            Box::new(m20260618_000001_ai_claude_team_overage_metric::Migration),
+            Box::new(m20260618_000002_seed_claude_team_overage_catalog::Migration),
         ]
     }
 }
