@@ -28,7 +28,8 @@
 
 ## Changelog
 
-- **v1.0** (current): Initial design. Establishes 7 components (fixture-loader, ch-seeder, dbt-runner, migration-applier, api-client, csv-asserter, session-rig), the data plane (docker compose with ClickHouse + MariaDB), the service plane (`analytics-api` binary on host with `cargo build --release`), and the assertion plane (pandas). Vertically slices through the bronze→silver→gold→API path defined in `cpt-dataflow-design-pipeline`.
+- **v1.1** (current): Authoring format moves from per-folder CSV (`bronze/*.csv` + `spec.yaml` + `expected/response.csv`) to a single declarative `<name>.test.yaml` (see `cpt-bronze-to-api-e2e-feature-yaml-rig`). Adds three components — `ref-resolver` (composition via `$ref` + sibling overrides), `schema-validator` (per-table JSON schema, padding, validation), `expect-engine` (Mongo-style `find` + `equal` subset + CEL `assert` over the batch response) — and retires `csv-asserter`. `fixture-loader` is repurposed to load `*.test.yaml`. The API roundtrip targets the batch endpoint `POST /v1/metrics/queries`. The transformation path (bronze→silver→gold→API) is unchanged; only the authoring format and assertion engine change.
+- **v1.0**: Initial design. Establishes 7 components (fixture-loader, ch-seeder, dbt-runner, migration-applier, api-client, csv-asserter, session-rig), the data plane (docker compose with ClickHouse + MariaDB), the service plane (`analytics-api` binary on host with `cargo build --release`), and the assertion plane (pandas). Vertically slices through the bronze→silver→gold→API path defined in `cpt-dataflow-design-pipeline`.
 
 ## 1. Architecture Overview
 
@@ -129,7 +130,19 @@ Expensive setup (docker compose, ClickHouse migrations, dbt manifest parse, anal
 
 - [ ] `p2` - **ID**: `cpt-bronze-to-api-e2e-principle-fixtures-are-truth`
 
-The CSV under `expected/` is what the test asserts on. There is no "regenerate from current production" mode. The `--update-snapshots` flag exists only to bootstrap a new test or to acknowledge an intentional behavior change, and it MUST be invoked deliberately by a developer (never by CI).
+The test file is what the test asserts on. There is no "regenerate from current production" mode. Under the YAML rig (`feature-yaml-rig`) expectations are explicit `expect` rules; an author writes only the fields/conditions that matter, never a full response snapshot.
+
+#### Records compose by reference, not repetition
+
+- [ ] `p1` - **ID**: `cpt-bronze-to-api-e2e-principle-record-composition`
+
+A bronze row (or a template) is a field map that may carry a `$ref: "<file>#/<json-pointer>"` to inherit from another record; sibling keys override the base (closest wins). Reusable people/source records live in `fixtures/templates/*.yaml`. A test spells out only the fields it exercises; everything else is inherited. This keeps a test small while the seeded row stays complete.
+
+#### The table schema is the source of truth for a row's shape
+
+- [ ] `p1` - **ID**: `cpt-bronze-to-api-e2e-principle-schema-is-truth`
+
+Per-table JSON schemas live in `fixtures/schemas/<table>.yaml` and are resolved by table name (the `bronze` key IS the table). After `$ref` resolution a row is padded with every missing schema column as `null` and validated; `additionalProperties:false` catches a misspelled column. Base templates carry the full column set (including the non-nullable `_airbyte_*` CDK columns, which transforms such as `insight.people`'s `argMax(..., _airbyte_extracted_at)` depend on).
 
 ### 2.2 Constraints
 
@@ -278,9 +291,74 @@ Does **NOT**: assert response content (that's `csv-asserter`); insert MariaDB ro
 - `cpt-bronze-to-api-e2e-component-session-rig` — orchestrates spawn/teardown
 - `cpt-bronze-to-api-e2e-component-csv-asserter` — receives the `ApiResponse`
 
-#### CSV Asserter
+#### Ref Resolver
+
+- [ ] `p1` - **ID**: `cpt-bronze-to-api-e2e-component-ref-resolver`
+
+##### Why this component exists
+
+The readability of the YAML rig rests on `$ref` + sibling-override composition. Resolving that — across files, with cycle detection and base-in-its-own-file semantics — is a self-contained, pure transformation worth isolating and unit-testing in full (`cpt-bronze-to-api-e2e-dod-yaml-ref-resolution`, 12 invariants).
+
+##### Responsibility scope
+
+Implements `cpt-bronze-to-api-e2e-algo-yaml-resolve-refs`: walks a YAML node; on a `$ref` loads the target (cached), resolves the base in the target file's context, deep-merges sibling overrides on top; guards cycles. Pure — no I/O beyond reading referenced YAML files.
+
+##### Responsibility boundaries
+
+Does **NOT**: connect to ClickHouse; know about schemas (padding/validation is `schema-validator`); evaluate `cases`.
+
+##### Related components (by ID)
+
+- `cpt-bronze-to-api-e2e-component-fixture-loader` — calls the resolver on each record
+- `cpt-bronze-to-api-e2e-component-schema-validator` — consumes resolved records
+
+#### Schema Validator
+
+- [ ] `p1` - **ID**: `cpt-bronze-to-api-e2e-component-schema-validator`
+
+##### Why this component exists
+
+A resolved bronze row must be a complete, well-typed table row. Centralizing schema lookup-by-table-name, null-padding, and JSON-schema validation makes "the row matches the table" a single, fail-fast checkpoint.
+
+##### Responsibility scope
+
+Loads `fixtures/schemas/<table>.yaml`; pads a resolved record with missing schema properties as `null`; validates against the JSON schema (`additionalProperties:false`). Implements the post-step of `cpt-bronze-to-api-e2e-algo-yaml-resolve-refs`.
+
+##### Responsibility boundaries
+
+Does **NOT**: coerce values to ClickHouse types (that's `ch-seeder` at INSERT time); resolve `$ref` (that's `ref-resolver`).
+
+##### Related components (by ID)
+
+- `cpt-bronze-to-api-e2e-component-ref-resolver` — supplies resolved records
+- `cpt-bronze-to-api-e2e-component-ch-seeder` — consumes padded/validated records
+
+#### Expect Engine
+
+- [ ] `p1` - **ID**: `cpt-bronze-to-api-e2e-component-expect-engine`
+
+##### Why this component exists
+
+Replaces `csv-asserter`. Dashboard metrics return many rows over a batch of queries; an author asserts a few fields/conditions, not a whole CSV. This component owns selection (`in` + Mongo-style `find`) and verdict (`equal` subset or CEL `assert`).
+
+##### Responsibility scope
+
+Implements `cpt-bronze-to-api-e2e-algo-yaml-eval-expect`: selects a batch result by `id`; filters `result.items` by a Mongo-style selector to exactly one row; compares a subset of fields (`equal`, explicit `null`) or evaluates a CEL boolean (`assert`) with bindings `it`/`items`/`result`/`results`/`status`. Renders a precise failing-rule report.
+
+##### Responsibility boundaries
+
+Does **NOT**: call the API (consumes the deserialized `BatchResponse`); mutate state; support a snapshot-update mode (expectations are authored, per `cpt-bronze-to-api-e2e-principle-fixtures-are-truth`).
+
+##### Related components (by ID)
+
+- `cpt-bronze-to-api-e2e-component-api-client` — supplies the `BatchResponse`
+- `cpt-bronze-to-api-e2e-component-fixture-loader` — supplies the `cases`
+
+#### CSV Asserter (retired in v1.1)
 
 - [ ] `p1` - **ID**: `cpt-bronze-to-api-e2e-component-csv-asserter`
+
+> **Retired in v1.1** — superseded by `cpt-bronze-to-api-e2e-component-expect-engine`. Kept here for traceability from `feature-csv-rig`.
 
 ##### Why this component exists
 
@@ -332,7 +410,8 @@ The framework consumes the existing analytics-api HTTP surface. No new endpoints
 
 | Method | Path | Description | Stability |
 |--------|------|-------------|-----------|
-| `POST` | `/v1/metrics/{id}/query` | Execute a metric query (OData `$filter`, `$top`, `$orderby`, `$select`) | stable |
+| `POST` | `/v1/metrics/queries` | Batch metric query — `{queries:[{id, metric_id, $filter,...}]}` → `{results:[{id, status, items|error}]}`. Primary roundtrip for the YAML rig. | stable |
+| `POST` | `/v1/metrics/{id}/query` | Execute a single metric query (OData `$filter`, `$top`, `$orderby`, `$select`) | stable |
 | `GET` | `/v1/metrics` | List metric definitions | stable |
 | `GET` | `/v1/metrics/{id}` | Get one metric definition | stable |
 | `GET` | `/v1/columns` | List column catalog | stable |

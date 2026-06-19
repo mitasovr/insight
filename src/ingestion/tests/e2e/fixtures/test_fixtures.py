@@ -1,117 +1,69 @@
-"""Parametrized fixture-runner.
+"""Parametrized runner for `*.test.yaml` fixtures.
 
-One pytest invocation per `fixtures/<name>/` folder. The body wires together
-every component built in DECOMPOSITION:
+One pytest invocation per discovered `<name>.test.yaml`. Implements
+`cpt-bronze-to-api-e2e-algo-yaml-execute-test`:
 
-    truncate-touched-bronze  →
-    seed bronze CSVs          →
-    dbt build --select        →
-    POST <endpoint>           →
-    pandas diff vs expected/response.csv
+    truncate prior test's tables  →
+    seed resolved bronze records  →
+    two-pass dbt build (staging, then silver)  →
+    recreate gold views (reapply migrations)   →
+    refresh intermediates  →
+    POST /v1/metrics/queries per case  →
+    evaluate expect rules
 
-The collection hook is in `../conftest.py`; this file only contains the test
-body and per-test fixtures (function-scoped).
+Discovery + per-test fixtures live in `../conftest.py`.
 """
 
 from __future__ import annotations
 
 import logging
-import os
+
 import pytest
 
 from e2e_lib.analytics_api import AnalyticsApiProcess
 from e2e_lib.ch_seeder import CHSeeder
-from e2e_lib.csv_asserter import assert_matches, update_snapshot
 from e2e_lib.dbt_runner import DbtRunner
-from e2e_lib.fixture_loader import Fixture
+from e2e_lib.expect_engine import evaluate_case
+from e2e_lib.fixture_loader import TestYaml
 from e2e_lib.migration_applier import refresh_intermediates, reapply_migrations
 from e2e_lib.worker import WorkerContext
-
 
 pytestmark = pytest.mark.fixture
 LOG = logging.getLogger("e2e.runner")
 
 
 def test_fixture(
-    fixture: Fixture,
+    test_yaml: TestYaml,
     ch_seeder: CHSeeder,
     dbt_runner: DbtRunner,
     analytics_api: AnalyticsApiProcess,
     worker_ctx: WorkerContext,
-    update_snapshots: bool,
 ) -> None:
-    # Step 1: clear what the prior test wrote (no-op on first test of session)
+    # 1. Clear what the prior test wrote (no-op on the first test).
     ch_seeder.truncate_touched()
 
-    # Step 2: seed the bronze AND silver tables this fixture targets
-    ch_seeder.seed(fixture)
+    # 2. Seed this test's resolved bronze records.
+    ch_seeder.seed_bronze(test_yaml.bronze)
 
-    # Step 3: run only the silver/staging models this fixture needs.
-    # Some fixtures read view-only metrics (e.g. insight.people) — they
-    # don't need any dbt model and omit dbt_selector entirely.
-    if fixture.spec.dbt_selector:
-        tokens = fixture.spec.dbt_selector.split()
-        silver = [t for t in tokens if t.strip("+").startswith("class_")]
-        upstream = [t for t in tokens if not t.strip("+").startswith("class_")]
-        # Two-pass build when the selector names both staging/promotion models
-        # and silver `class_*` models. The on-run-start hook
-        # `drop_silver_placeholders_at_start` only drops a silver placeholder
-        # once its staging model is materialised; in a single `dbt build` that
-        # also builds the staging, that condition is false at on-run-start, so
-        # the placeholder survives and the silver model then inserts its real
-        # (different) schema into the placeholder → ClickHouse column mismatch.
-        # Prod converges across successive dbt runs; the rig does one build per
-        # fixture, so we stage it explicitly: materialise upstream first, then
-        # build the silver models against the now-present staging.
-        if silver and upstream:
-            dbt_runner.build(" ".join(upstream), worker_ctx=worker_ctx)
-            dbt_runner.build(" ".join(silver), worker_ctx=worker_ctx)
-        else:
-            dbt_runner.build(fixture.spec.dbt_selector, worker_ctx=worker_ctx)
-        # dbt materializes silver tables that are NOT in the CSV-seed ledger, so
-        # truncate_touched() would not clear them before the next test — they
-        # would leak into a later fixture whose gold view reads the same silver
-        # table (e.g. a meeting fixture seeing a prior email fixture's
-        # dbt-built class_collab_email_activity). Record every `class_*` model
-        # named in the selector so the next test's truncate_touched() clears it.
-        for name in (t.strip("+") for t in silver):
-            ch_seeder.ledger.record("silver", name)
+    # 3. Build the dbt models the seeded tables feed: staging first (the `+`
+    #    pulls <connector>__bronze_promoted), then the silver class models.
+    staging, silver = dbt_runner.derive_selectors(test_yaml.touched_tables)
+    if staging:
+        dbt_runner.build(" ".join(f"+{m}" for m in staging), worker_ctx=worker_ctx)
+    if silver:
+        dbt_runner.build(" ".join(silver), worker_ctx=worker_ctx)
+        for cls in silver:
+            ch_seeder.ledger.record("silver", cls)
 
-        # Step 3a: recreate gold views against the now-real silver schema. dbt
-        # rebuilt silver with its real (Nullable) schema, but the views were
-        # CREATE-d at session start against the placeholder schema; reading them
-        # under a date-filter subquery would otherwise raise a Nullable-structure
-        # mismatch (see reapply_migrations docstring; confirmed clean on dev).
+    # 4. Recreate gold views against the now-real silver schema (fixes the rig-only
+    #    Code 80 nullability mismatch on date-filtered reads), then refresh MVs.
+    if staging or silver:
         reapply_migrations(ch_seeder.cfg)
-
-    # Step 3b: refresh materialized intermediates (task_issue_current_state etc).
-    # These are MVs with a 1-hour refresh schedule in prod; we trigger sync now
-    # so the fixture's silver writes are visible to gold views immediately.
-    # Cheap (~tens of ms on a fresh CH) — always-on is simpler than gating.
     refresh_intermediates(ch_seeder.cfg)
 
-    # Step 4: call the API
-    response = analytics_api.call_fixture(fixture)
-    if response.status_code != 200:
-        LOG.warning("API returned %d; body: %r", response.status_code, response.raw)
-
-    # Step 5: assert OR snapshot-update
-    if update_snapshots:
-        if os.environ.get("CI") == "true":
-            pytest.fail("--update-snapshots is forbidden under CI=true")
-        # Refuse to write an empty/error-body snapshot — that would silently
-        # encode the broken state and make the NEXT run "pass" against a
-        # garbage expectation. The author must fix the API call first.
-        if response.status_code != 200:
-            pytest.fail(
-                f"--update-snapshots refused: API returned {response.status_code}, "
-                f"not 200. Fix the request/state first.\n"
-                f"  body: {response.raw!r}"
-            )
-        summary = update_snapshot(response, fixture)
-        target = fixture.root / "expected" / "response.csv"
-        LOG.info("snapshot updated: %s", target)
-        if summary and summary != "(no changes)":
-            LOG.info("changes:\n%s", summary)
-        return
-    assert_matches(response, fixture)
+    # 5. Run each case's batch request and evaluate its expect rules.
+    for case in test_yaml.cases:
+        status, payload = analytics_api.call_request(case["request"])
+        if status != 200:
+            LOG.warning("HTTP %d; body: %r", status, payload)
+        evaluate_case(case, payload, status)

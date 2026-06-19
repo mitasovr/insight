@@ -34,9 +34,8 @@ from e2e_lib import compose, mariadb
 from e2e_lib.analytics_api import AnalyticsApiProcess, build, find_free_port
 from e2e_lib.ch_seeder import CHSeeder
 from e2e_lib.config import SessionConfig
-from e2e_lib.csv_asserter import assert_matches, update_snapshot
 from e2e_lib.dbt_runner import DbtRunner
-from e2e_lib.fixture_loader import Fixture, discover_all, load as load_fixture
+from e2e_lib.fixture_loader import TestYaml, discover_tests, load as load_test
 from e2e_lib.metric_seed import seed_test_metrics
 from e2e_lib.migration_applier import apply_all as apply_ch_migrations
 from e2e_lib.worker import WorkerContext
@@ -174,7 +173,7 @@ def ch_seeder(ch_migrations_applied: SessionConfig) -> CHSeeder:
 
 
 # ----------------------------------------------------------------------
-# csv-rig: per-fixture parametrization and execution
+# yaml-rig: per-test parametrization and execution
 # ----------------------------------------------------------------------
 
 
@@ -186,45 +185,18 @@ def pytest_collection_modifyitems(config, items):
     items.sort(key=lambda i: 0 if "meta/" in str(i.path) else 1)
 
 
-def _all_fixture_paths() -> list[Path]:
-    """Discover candidate fixture folders. Eagerly load to catch malformed
-    fixtures at pytest-collect time (per cpt-bronze-to-api-e2e-dod-csv-rig-folder-discovery)."""
-    paths = discover_all(_FIXTURES_ROOT)
-    # Validate each so a misshapen fixture fails collection of just itself,
-    # not the whole session. Errors are re-raised by the test function below
-    # via pytest.fail() — we cannot raise here (collection-time exceptions
-    # abort the whole module).
-    return paths
-
-
 def pytest_generate_tests(metafunc):
-    """Generate one `test_fixture` invocation per fixture folder."""
-    if "fixture" in metafunc.fixturenames and metafunc.function.__name__ == "test_fixture":
-        paths = _all_fixture_paths()
+    """Generate one `test_fixture` invocation per discovered `*.test.yaml`."""
+    if "test_yaml" in metafunc.fixturenames and metafunc.function.__name__ == "test_fixture":
+        paths = discover_tests(_FIXTURES_ROOT)
         metafunc.parametrize(
-            "fixture_path",
+            "test_path",
             paths,
-            ids=[p.name for p in paths],
+            ids=[p.name[: -len(".test.yaml")] for p in paths],
         )
 
 
 @pytest.fixture
-def fixture(fixture_path: Path) -> Fixture:
-    """Load the fixture; failures surface as test failures (not collection errors)."""
-    return load_fixture(fixture_path)
-
-
-@pytest.fixture
-def update_snapshots(pytestconfig) -> bool:
-    """`--update-snapshots` CLI flag — feature-snapshot-update plumbing."""
-    return bool(pytestconfig.getoption("--update-snapshots", default=False))
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--update-snapshots",
-        action="store_true",
-        default=False,
-        help="Write actual response to expected/response.csv instead of asserting. "
-             "Refuses to run under CI=true.",
-    )
+def test_yaml(test_path: Path) -> TestYaml:
+    """Load + resolve the test file; malformed files fail here as a test failure."""
+    return load_test(test_path)

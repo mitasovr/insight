@@ -25,7 +25,6 @@ from typing import Any
 import httpx
 
 from e2e_lib.config import SessionConfig
-from e2e_lib.fixture_loader import Fixture
 
 LOG = logging.getLogger("e2e.api")
 
@@ -246,22 +245,27 @@ class AnalyticsApiProcess:
         """Return an httpx.Client bound to this process's base URL."""
         return httpx.Client(base_url=self.base_url, timeout=30.0)
 
-    def call_fixture(self, fixture: Fixture) -> ApiResponse:
-        """Build a request from the fixture's spec.yaml, execute it, return ApiResponse.
+    def call_request(self, request: dict) -> tuple[int, Any]:
+        """Execute a `case.request` ({url, method, body}). Return (status_code, json|text).
 
-        Handles `{metric_id}` interpolation in the endpoint and uses the spec's
-        `method` (default POST). The request body is sent as JSON.
+        Used by the YAML rig; the primary endpoint is the batch
+        `POST /v1/metrics/queries`. The body is sent as JSON.
         """
-        endpoint = fixture.spec.resolved_endpoint()
+        url = request["url"]
+        method = str(request.get("method", "POST")).upper()
+        body = request.get("body")
         with self.client() as c:
-            method = fixture.spec.method.upper()
             kwargs: dict[str, Any] = {}
-            if method in ("POST", "PUT") and fixture.spec.request_body:
-                kwargs["json"] = fixture.spec.request_body
-            LOG.info("→ %s %s", method, endpoint)
-            response = c.request(method, endpoint, **kwargs)
+            if method in ("POST", "PUT") and body is not None:
+                kwargs["json"] = body
+            LOG.info("→ %s %s", method, url)
+            response = c.request(method, url, **kwargs)
             LOG.info("← %d  (%d bytes)", response.status_code, len(response.content))
-            return ApiResponse.from_httpx(response)
+            try:
+                payload = response.json()
+            except Exception:  # noqa: BLE001
+                payload = response.text
+            return response.status_code, payload
 
     def _wait_healthy(self, *, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s
