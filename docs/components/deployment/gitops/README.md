@@ -88,7 +88,7 @@ The deployment system has five explicit goals:
                          |                   |               |
                          | Kubernetes (VPN)  |               |
                          | dev / stage /     |               |
-                         | virtuozzo / …     |               |
+                         | customers / …     |               |
                          +-------------------+               |
                                                              |
                          +-------------------+   reads       |
@@ -100,7 +100,7 @@ The deployment system has five explicit goals:
 The four arrows that matter:
 
 1. **Public outbound** — GitHub Actions push to GHCR. No secret in the egress.
-2. **Public inbound** — the GitLab poller pulls chart-tag listings from `oci://ghcr.io/cyberfabric/charts/insight` via `skopeo list-tags`. No code, no secrets.
+2. **Public inbound** — the GitLab poller pulls chart-tag listings from `oci://ghcr.io/constructorfabric/charts/insight` via `skopeo list-tags`. No code, no secrets.
 3. **Internal commit** — the poller commits an updated `image.tag` to the internal GitLab. Confined to the corporate network.
 4. **Cluster apply** — the engineer's `helm upgrade --install` runs from a workstation with VPN + kubeconfig. The cluster never reaches out to GitLab; this is **pull-from-engineer**, not GitOps reconciliation.
 
@@ -110,10 +110,10 @@ Two repositories with clearly different audiences and access policies.
 
 | Repository             | Host | Visibility | Owns |
 |------------------------|------|------------|------|
-| `cyberfabric/insight`  | GitHub | public | Application source, Dockerfiles, GitHub Actions workflows that build and push images to GHCR. Open-source umbrella Helm chart definition for evaluators (no production values). |
+| `constructorfabric/insight`  | GitHub | public | Application source, Dockerfiles, GitHub Actions workflows that build and push images to GHCR. Open-source umbrella Helm chart definition for evaluators (no production values). |
 | `infra/insight-gitops` | GitLab (internal) | private | Per-environment Helm `values.yaml`, sealed secrets, the `image-poller` GitLab CI job, the `Makefile` engineers run, and the `scripts/` it calls. Pinned chart versions, the cluster-side truth. |
 
-Customers and external evaluators never see `infra/insight-gitops`. The public `cyberfabric/insight` ships the umbrella chart and its example values; internal production wiring (DNS, OIDC issuer, password material) lives only in the private repo.
+Customers and external evaluators never see `infra/insight-gitops`. The public `constructorfabric/insight` ships the umbrella chart and its example values; internal production wiring (DNS, OIDC issuer, password material) lives only in the private repo.
 
 ### 1.4 Trust Boundaries
 
@@ -131,7 +131,7 @@ Insight on Kubernetes is split into three deploy layers. Each layer has its own 
 |------|---------|-----------|---------------|-------------------------------------------|
 | **L0 — Bootstrap** | Cluster prerequisites. Installs sealed-secrets-controller, ingress-nginx, cert-manager (and any cluster-scoped issuers/CRDs); creates the `insight-infra` and `insight` namespaces. | cluster-scoped | `make bootstrap ENV=<env>` (idempotent) | `bootstrap/<env>/` |
 | **L2 — System** | Shared stateful infrastructure: MariaDB, ClickHouse, Redis, Redpanda + Redpanda Console, Airbyte, Argo Workflows. **One Helm release per service.** Each service can also be replaced by a managed external endpoint (RDS, MSK, etc.) — in which case its `system/<service>/` is simply not installed and the app values point at the external host. | `insight-infra` (one per cluster, shared by every app deploy on that cluster) | manually, deliberately. Either `cd system/<service> && helm upgrade --install …` for a values-only release, or `make system-<service> ENV=<env>` when a sealed-secret needs to be created/refreshed in the same step. | `system/<service>/` (base) + `environments/<env>/<service>-values.yaml` (per-env overlay) + `environments/<env>/sealed-secrets/insight-infra/` |
-| **L3 — App** | The Insight platform itself: api-gateway, analytics-api, identity-resolution, frontend. The umbrella chart, app services only — no infra subcharts. | `insight` (one Insight install per cluster; ENV selects the **cluster**, not the namespace) | `make deploy-app ENV=<env>` (alias `make deploy`); pulls the umbrella chart from `oci://ghcr.io/cyberfabric/charts/insight` pinned to `.insight-version`. | `environments/<env>/values.yaml` + `environments/<env>/sealed-secrets/insight/` |
+| **L3 — App** | The Insight platform itself: api-gateway, analytics-api, identity-resolution, frontend. The umbrella chart, app services only — no infra subcharts. | `insight` (one Insight install per cluster; ENV selects the **cluster**, not the namespace) | `make deploy-app ENV=<env>` (alias `make deploy`); pulls the umbrella chart from `oci://ghcr.io/constructorfabric/charts/insight` pinned to `.insight-version`. | `environments/<env>/values.yaml` + `environments/<env>/sealed-secrets/insight/` |
 
 There is no L1. The numbering is reserved: cluster + node provisioning (k3s install, kubelet config, OS) sit conceptually below L0 and are out of scope for this SPEC.
 
@@ -158,7 +158,7 @@ Each cluster hosts exactly one Insight install. The cluster's identity (which en
 
 #### Dual-purpose umbrella: `<service>.deploy` toggles
 
-The umbrella chart in `cyberfabric/insight` keeps its infrastructure subcharts (`clickhouse`, `mariadb`, `redis`, `redpanda`) **gated by per-service `<service>.deploy: true|false` flags**. The flag is the dev-vs-prod switch:
+The umbrella chart in `constructorfabric/insight` keeps its infrastructure subcharts (`clickhouse`, `mariadb`, `redis`, `redpanda`) **gated by per-service `<service>.deploy: true|false` flags**. The flag is the dev-vs-prod switch:
 
 | Caller | `<svc>.deploy` | Result |
 |--------|----------------|--------|
@@ -177,7 +177,7 @@ Airbyte and Argo Workflows are **not** subcharts of the umbrella in either mode 
 
 ### 2.1 Image Tag Format
 
-Every image pushed to GHCR by `cyberfabric/insight` GitHub Actions **MUST** carry exactly one canonical tag in the format:
+Every image pushed to GHCR by `constructorfabric/insight` GitHub Actions **MUST** carry exactly one canonical tag in the format:
 
 ```
 YYYY.MM.DD.HH.MM-<shortSHA>
@@ -204,21 +204,21 @@ The format is chosen to satisfy four constraints simultaneously:
 |------------|-----------------------------|
 | Lexicographic sort = chronological sort. | Year-major fixed-width components mean `sort -r` returns the newest tag first without parsing dates. The poller relies on this. |
 | Human-readable in `kubectl describe`. | An on-call engineer reading a pod spec sees "this pod runs the 09:17 build from May 6th" without joining tables. |
-| Uniquely traceable to a commit. | The shortSHA component points back to a Git revision in `cyberfabric/insight`. No name collisions in practice (7-char shortSHA collisions are rare enough on a single repo at this scale). |
+| Uniquely traceable to a commit. | The shortSHA component points back to a Git revision in `constructorfabric/insight`. No name collisions in practice (7-char shortSHA collisions are rare enough on a single repo at this scale). |
 | Distinguishes two builds of the same commit. | The time component changes on every CI run, so a re-run after a flaky test produces a different tag and the cluster picks up the second build, not the first. |
 
 ### 2.3 Chart and Manifest Versioning
 
-The deployment artifact is the umbrella Helm chart, published per merge to `oci://ghcr.io/cyberfabric/charts/insight:<semver>`. The gitops repo pins exactly one published version per environment. The contract has four versioned things, each with one job:
+The deployment artifact is the umbrella Helm chart, published per merge to `oci://ghcr.io/constructorfabric/charts/insight:<semver>`. The gitops repo pins exactly one published version per environment. The contract has four versioned things, each with one job:
 
 | Field | Where | Format | Bumped by |
 |---|---|---|---|
-| Image tag | GHCR image, e.g. `ghcr.io/cyberfabric/insight-api-gateway:T` | `YYYY.MM.DD.HH.MM-<shortSHA>` | CI on every image build (status quo). |
+| Image tag | GHCR image, e.g. `ghcr.io/constructorfabric/insight-api-gateway:T` | `YYYY.MM.DD.HH.MM-<shortSHA>` | CI on every image build (status quo). |
 | Subchart `appVersion` | `src/.../helm/Chart.yaml` (one per service) | image tag | CI, when the service's image rebuilds. |
 | Subchart `version` | same `Chart.yaml` | semver | PR author, only when subchart templates change. |
 | Umbrella `version` | `charts/insight/Chart.yaml` | semver, patch per publish, minor on shape change | CI per merge to `main`. |
 | Umbrella `appVersion` | same `Chart.yaml` | image tag of the publishing CI run | CI per merge to `main`. Display only. |
-| Gitops pin | `infra/insight-gitops/.insight-version` | one line, umbrella semver, e.g. `0.1.47` | poller (auto for `dev`); engineer MR (for any non-dev env, e.g. `stage`, `virtuozzo`, `constructor`, `acronis`). |
+| Gitops pin | `infra/insight-gitops/.insight-version` | one line, umbrella semver, e.g. `0.1.47` | poller (auto for `dev`); engineer MR (for any non-dev env, e.g. `stage`, `acme`, `globex`). |
 
 Rules that follow from this:
 
@@ -232,7 +232,7 @@ The `infra/insight-gitops` repository may tag its own commits as `deploy-YYYY.MM
 
 ### 2.4 Chart Publishing
 
-Per merge to `main` of `cyberfabric/insight`, GitHub Actions publishes the umbrella chart to GHCR in one workflow. The contract — independent of any specific YAML — is:
+Per merge to `main` of `constructorfabric/insight`, GitHub Actions publishes the umbrella chart to GHCR in one workflow. The contract — independent of any specific YAML — is:
 
 1. Build whichever service images changed (existing behaviour).
 2. For each rebuilt service, bump that subchart's `Chart.yaml` `appVersion` to the build tag. Subchart `version` is bumped only when the subchart's templates changed (PR author's call, gated by review).
@@ -240,16 +240,16 @@ Per merge to `main` of `cyberfabric/insight`, GitHub Actions publishes the umbre
 4. Run `helm dependency update charts/insight` to regenerate `Chart.lock` from `file://` subcharts.
 5. `helm package charts/insight -d dist/`.
 6. `helm registry login ghcr.io` using the workflow's `GITHUB_TOKEN`.
-7. `helm push dist/insight-<version>.tgz oci://ghcr.io/cyberfabric/charts`.
+7. `helm push dist/insight-<version>.tgz oci://ghcr.io/constructorfabric/charts`.
 8. Commit the version bumps back to `main` so the repo state matches what was published.
 
-Resulting OCI artifact: `oci://ghcr.io/cyberfabric/charts/insight:<version>`. The `charts/` segment is part of the GHCR package name (standard Helm-OCI behaviour). The decision rationale lives in [ADR 0001](../specs/ADR/0001-chart-publishing-on-merge.md).
+Resulting OCI artifact: `oci://ghcr.io/constructorfabric/charts/insight:<version>`. The `charts/` segment is part of the GHCR package name (standard Helm-OCI behaviour). The decision rationale lives in [ADR 0001](../specs/ADR/0001-chart-publishing-on-merge.md).
 
 ## 3. Step-by-Step Workflow
 
 ### 3.1 Code Push to GitHub
 
-An engineer or external contributor merges a pull request into `main` of `cyberfabric/insight`. No special tag, no release, just a merge commit.
+An engineer or external contributor merges a pull request into `main` of `constructorfabric/insight`. No special tag, no release, just a merge commit.
 
 GitHub Actions workflow `.github/workflows/build-and-push.yaml` triggers on `push: branches: [main]` and on `workflow_dispatch` for manual reruns.
 
@@ -264,8 +264,8 @@ The workflow:
    ```
 3. Logs in to GHCR with the workflow's `GITHUB_TOKEN` (no PAT).
 4. For each service (api-gateway, analytics-api, frontend, identity-resolution, …):
-   - `docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/cyberfabric/insight-<service>:${TAG} .`
-   - `docker push ghcr.io/cyberfabric/insight-<service>:${TAG}`
+   - `docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/constructorfabric/insight-<service>:${TAG} .`
+   - `docker push ghcr.io/constructorfabric/insight-<service>:${TAG}`
 5. Optionally pushes `:latest` for `main` builds (consumed only by local dev, never by the poller).
 6. Emits the tag as a workflow output so the run page shows it without scrolling logs.
 
@@ -278,7 +278,7 @@ A scheduled GitLab CI job `chart-poller` runs once per hour (cron `0 * * * *`) o
 Logic (pseudocode, implemented in `infra/insight-gitops/scripts/poller.sh`):
 
 ```
-chart_repo=$(yq '.chart_repository' .poller.yaml)   # oci://ghcr.io/cyberfabric/charts/insight
+chart_repo=$(yq '.chart_repository' .poller.yaml)   # oci://ghcr.io/constructorfabric/charts/insight
 pin_file=$(yq '.version_pin_file' .poller.yaml)     # .insight-version
 regex=$(yq '.semver_regex' .poller.yaml)            # ^[0-9]+\.[0-9]+\.[0-9]+$
 
@@ -301,7 +301,7 @@ Behaviour:
 - Strict semver regex on the tag listing. Pre-release tags or anything off-format is ignored.
 - One commit per poll run when the pin moves; nothing committed when no new version exists.
 - Commits are authored by a service account (`infra-poller@cyberfabric.local`) with a deploy key scoped to push to `main` of `infra/insight-gitops` only.
-- The poller acts only on environments listed in `auto_envs` of `.poller.yaml`. `dev` is included; non-dev envs (the internal `stage`/`test` clusters and every customer-named production cluster — `virtuozzo`, `constructor`, `acronis`, …) are **not** auto-polled, those bumps are PR'd by an engineer, see [§3.4](#34-engineer-pulls-and-deploys).
+- The poller acts only on environments listed in `auto_envs` of `.poller.yaml`. `dev` is included; non-dev envs (the internal `stage`/`test` clusters and every customer-named production cluster — `acme`, `globex`, …) are **not** auto-polled, those bumps are PR'd by an engineer, see [§3.6](#36-engineer-deploys-the-app-l3).
 - The poller does not write to per-environment values files. Image tags in env values are expected to be empty (the chart's per-subchart `appVersion` flows through). Hotfix-style explicit `image.tag` overrides are an engineer-authored MR, never a poller action.
 - A failed `git push` (e.g. someone else pushed a manual change in the same hour) retries with `git pull --rebase` once; on a second failure it leaves the repo dirty and surfaces a CI failure.
 
@@ -356,16 +356,16 @@ The app deploy is the routine hands-off step — a deploy is always initiated by
 2. **Inspect** — `git log --oneline origin/main ^HEAD@{upstream}` (run by `make diff`) shows the poller commits since the last deploy.
 3. **VPN + context check** — `make deploy ENV=<env>` runs the cluster reachability probe and confirms the active kube-context is `insight-<env>` before doing any work.
 4. **Diff** — the Makefile renders the chart with the current values (`helm template …`) and stores the rendered manifest under `.deploy/last-render-<env>.yaml`. The engineer can `diff` against the previous render to see what is changing on the cluster.
-5. **Apply** — `helm upgrade --install insight $CHART --version $(cat .insight-version) -n insight -f environments/<env>/values.yaml`, where `$CHART = oci://ghcr.io/cyberfabric/charts/insight`. The chart is pulled from GHCR at deploy time; the gitops repo does **not** vendor it — see [§7](#7-repository-layout-target). The Makefile passes `--atomic --timeout 10m` so a failed deploy is rolled back automatically.
+5. **Apply** — `helm upgrade --install insight $CHART --version $(cat .insight-version) -n insight -f environments/<env>/values.yaml`, where `$CHART = oci://ghcr.io/constructorfabric/charts/insight`. The chart is pulled from GHCR at deploy time; the gitops repo does **not** vendor it — see [§7](#7-repository-layout-target). The Makefile passes `--atomic --timeout 10m` so a failed deploy is rolled back automatically.
 6. **Verify** — `make status ENV=<env>` runs `kubectl rollout status` for each deployment + `helm test` for smoke tests.
 
 `make deploy` is an alias for `make deploy-app` and only touches the L3 layer. The L0 bootstrap and L2 system services are not chained — they are explicit prior steps with their own engineer-approved moments. This is by design: an app upgrade should never be able to migrate a database.
 
-For every non-`dev` environment — both the internal `test` and `stage` clusters and every customer-named production cluster (`virtuozzo`, `constructor`, `acronis`, …; one entry per customer install, no generic "prod"):
+For every non-`dev` environment — both the internal `test` and `stage` clusters and every customer-named production cluster (`acme`, `globex`, …; one entry per customer install, no generic "prod"):
 
 - The poller does not auto-bump the chart pin. An engineer opens a merge request that bumps `environments/<env>/.insight-version` (or the umbrella values file) to the desired version (typically the one currently green on `dev`).
 - After review and merge, the engineer runs `make deploy ENV=<env>` from their workstation.
-- For environments listed in the Makefile's `PROTECTED_ENVS` (every customer cluster; internal `test`/`stage` are at the team's discretion), `make deploy` requires an additional `CONFIRM=yes-deploy-<env>` flag — e.g. `CONFIRM=yes-deploy-virtuozzo` — so a typo on a sleepy morning does not push to a customer cluster. See [§6.2](#62-public-targets) and [§6.3](#63-pre-flight-safety-checks) for the safety check.
+- For environments listed in the Makefile's `PROTECTED_ENVS` (every customer cluster; internal `test`/`stage` are at the team's discretion), `make deploy` requires an additional `CONFIRM=yes-deploy-<env>` flag — e.g. `CONFIRM=yes-deploy-acme` — so a typo on a sleepy morning does not push to a customer cluster. See [§6.2](#62-public-targets) and [§6.3](#63-pre-flight-safety-checks) for the safety check.
 
 ## 4. Security Implementation
 
@@ -391,7 +391,7 @@ There is no path that puts a raw secret on disk in cleartext between Passbolt an
 
 - Authoritative store for raw passwords, OIDC client secrets, database passwords, GHCR pull secrets, TLS keys.
 - **Storage convention**: one Passbolt resource per Kubernetes Secret per environment. The resource's **password field carries the entire cleartext Kubernetes Secret manifest as a single-line JSON object**, ready to be piped to `kubeseal` without further composition. JSON (not YAML) because Passbolt's password field is single-line in the UI and silently strips newlines on save; `kubeseal` accepts JSON and YAML interchangeably. The resource's URI/username/description fields are documentation only (e.g. `kubectl-namespace=insight`, `kubectl-name=insight-oidc`). Example payload (paste verbatim, with the password substituted): `{"apiVersion":"v1","kind":"Secret","metadata":{"name":"<name>","namespace":"<ns>"},"type":"Opaque","stringData":{"<key>":"<value>"}}`.
-- **Naming**: `insight-<env>-<base>` (e.g. `insight-dev-oidc`, `insight-virtuozzo-db-creds`). The Makefile defaults `PASSBOLT_NAME` to this expression so the engineer rarely passes it explicitly.
+- **Naming**: `insight-<env>-<base>` (e.g. `insight-dev-oidc`, `insight-acme-db-creds`). The Makefile defaults `PASSBOLT_NAME` to this expression so the engineer rarely passes it explicitly.
 - **Authentication**: each engineer's Passbolt account is bound to their personal GPG keypair. `passbolt configure` is run once per workstation to register the server URL, the user, and the private key; subsequent `passbolt get resource --json --id <uuid>` decrypts the resource via the local GPG agent (passphrase cached in the OS keychain). CI never authenticates to Passbolt — the sealing step is a human action.
 - The `passbolt` CLI (community: [`go-passbolt-cli`](https://github.com/passbolt/go-passbolt-cli)) is the only sanctioned way to read a secret. Browser-extension copy/paste, screenshots, or pasting into chat are explicitly not.
 
@@ -473,10 +473,10 @@ A `Brewfile` at the repo root captures these dependencies; `make doctor` runs `b
 
 ### 5.2 Authentication
 
-- **GitHub** — read access to `cyberfabric/insight` (public) is enough for clones; pushes are protected and only the CI workflow's `GITHUB_TOKEN` can publish images.
+- **GitHub** — read access to `constructorfabric/insight` (public) is enough for clones; pushes are protected and only the CI workflow's `GITHUB_TOKEN` can publish images.
 - **GitLab** — engineer authenticates with SSH key (`gitlab.cyberfabric.internal`); the deploy-key for the poller is separate and lives only in the GitLab CI variables store.
 - **GHCR** — pulls are public; the cluster's image-pull secret is only needed if the team flips an image to private later. The pull secret itself is a sealed secret in the repo.
-- **Kubernetes** — engineer's kubeconfig is generated by the corporate IdP; per-cluster contexts follow `insight-<env>` (e.g. `insight-dev`, `insight-stage`, `insight-virtuozzo`, `insight-constructor`). The Makefile checks `kubectl config current-context` against the requested `ENV` before any apply.
+- **Kubernetes** — engineer's kubeconfig is generated by the corporate IdP; per-cluster contexts follow `insight-<env>` (e.g. `insight-dev`, `insight-stage`, `insight-acme`). The Makefile checks `kubectl config current-context` against the requested `ENV` before any apply.
 - **Passbolt** — `passbolt configure` is run once per workstation: it asks for the server URL, the user's private GPG key file, and the key passphrase. Subsequent `passbolt get resource` invocations decrypt via the local GPG agent; the passphrase is cached in the OS keychain for the agent's TTL.
 
 ### 5.3 VPN and Cluster Access
@@ -496,7 +496,7 @@ A `Brewfile` at the repo root captures these dependencies; `make doctor` runs `b
 ENV              ?= dev
 NS_APP           ?= insight-$(ENV)
 RELEASE          ?= insight
-CHART            ?= oci://ghcr.io/cyberfabric/charts/insight
+CHART            ?= oci://ghcr.io/constructorfabric/charts/insight
 INSIGHT_VERSION  ?= $(shell cat .insight-version)
 VALUES           ?= environments/$(ENV)/values.yaml
 KUBE_CTX         ?= insight-$(ENV)
@@ -514,7 +514,7 @@ MARIADB_CHART            ?= oci://registry-1.docker.io/bitnamicharts/mariadb
 MARIADB_VERSION          ?= 21.0.x   # pin to a specific patch in system/mariadb/
 
 CLICKHOUSE_RELEASE       ?= clickhouse
-CLICKHOUSE_CHART         ?= oci://ghcr.io/cyberfabric/charts/clickhouse
+CLICKHOUSE_CHART         ?= oci://ghcr.io/constructorfabric/charts/clickhouse
 CLICKHOUSE_VERSION       ?= 0.x.y
 
 REDIS_RELEASE            ?= redis
@@ -543,7 +543,7 @@ CERT_MANAGER_VERSION     ?= v1.18.0
 SEALED_SECRETS_VERSION   ?= 2.17.4
 ```
 
-- All variables are overridable on the command line (`make deploy ENV=stage`, `make system-airbyte ENV=virtuozzo AIRBYTE_VERSION=1.9.0`).
+- All variables are overridable on the command line (`make deploy ENV=stage`, `make system-airbyte ENV=acme AIRBYTE_VERSION=1.9.0`).
 - `ENV` selects which values file, which kube-context, which sealed-secrets directory, and which app namespace.
 - `NS_APP` (= `insight-$(ENV)`) is the L3 target namespace; `NS_INFRA` (= `insight-infra`, cluster-shared) is the L2 target namespace. Both are created by `make bootstrap` (see [§3.4](#34-engineer-bootstraps-a-cluster-l0)).
 - `INSIGHT_VERSION` defaults to the contents of `.insight-version` at the repo root — the umbrella semver currently pinned for this repo. Override only for ad-hoc one-off renders (`make diff INSIGHT_VERSION=0.1.42`).
@@ -630,8 +630,8 @@ kube-ctx:
 
 # PROTECTED_ENVS is the list of customer-named production clusters
 # (and any internal env the team wants gated). Add new entries as
-# customers come online — virtuozzo, constructor, acronis, …
-PROTECTED_ENVS := virtuozzo
+# customers come online — acme, globex, …
+PROTECTED_ENVS := acme
 
 .PHONY: confirm
 confirm:
@@ -653,7 +653,7 @@ Rationale, one line per check:
 - `sync-clean` rejects ambiguous state. The cluster must reflect a known commit.
 - `vpn-up` makes "wrong network" a clean error rather than a 10-minute Helm timeout.
 - `kube-ctx` prevents the worst class of accident: deploying customer values into the wrong cluster (or `dev` values into a customer cluster) because the context was left selected from a previous task.
-- `confirm` is a deliberately ugly flag, scoped per env. If you can type `CONFIRM=yes-deploy-virtuozzo`, you have looked at it. Each customer cluster requires its own token (`yes-deploy-constructor`, `yes-deploy-acronis`, …) so muscle memory does not carry across customers.
+- `confirm` is a deliberately ugly flag, scoped per env. If you can type `CONFIRM=yes-deploy-acme`, you have looked at it. Each customer cluster requires its own token (`yes-deploy-globex`, …) so muscle memory does not carry across customers.
 - `passbolt-configured` is checked at the start of `seal-secret` rather than inside the pipe so the failure message is clear.
 
 ### 6.4 Deploy Logic
@@ -687,7 +687,7 @@ chart-present:
 
 Notes:
 
-- `$(CHART)` resolves to `oci://ghcr.io/cyberfabric/charts/insight`; `$(INSIGHT_VERSION)` resolves to the contents of `.insight-version`. Together they uniquely identify the published artifact.
+- `$(CHART)` resolves to `oci://ghcr.io/constructorfabric/charts/insight`; `$(INSIGHT_VERSION)` resolves to the contents of `.insight-version`. Together they uniquely identify the published artifact.
 - `$(NS_APP)` is `insight-$(ENV)` per [§1.5](#15-layer-model). `--create-namespace` makes `make deploy` runnable on a freshly bootstrapped cluster even before the engineer has explicitly created the namespace.
 - `chart-present` fails fast if the OCI tag does not exist — saves the engineer a confusing `helm upgrade` error.
 - `helm template` first lets the engineer abort if the rendered diff looks wrong.
@@ -824,9 +824,9 @@ infra/insight-gitops/
 │   │           └── insight-db-creds-sealedsecret.yaml
 │   ├── stage/                     # internal — promote-by-MR (optional)
 │   │   └── …                      # same shape as dev/
-│   ├── virtuozzo/                 # customer prod — promote-by-MR + confirm token
+│   ├── acme/                      # customer prod — promote-by-MR + confirm token
 │   │   └── …                      # same shape; sealed-secrets/insight/ for L3
-│   └── <other-customer>/          # one dir per customer install (constructor, acronis, …)
+│   └── <other-customer>/          # one dir per customer install (globex, …)
 │       └── …                      # same shape
 │
 └── scripts/
@@ -843,7 +843,7 @@ Conventions:
 - **L2 files** are split by service (`system/<service>/values.yaml`) to keep each release independently readable. Per-env tuning lives in `environments/<env>/<service>-values.yaml` and is layered on top at deploy time. A self-hosted cluster carries the values; a managed-external cluster simply does not run that `make system-<service>` target.
 - **L3 files** stay where they were: one `values.yaml` per env for the umbrella chart, plus one `pub-cert.pem` per cluster.
 - **Sealed secrets** are split by **target namespace** under `environments/<env>/sealed-secrets/<namespace>/`. `insight-infra` for L2, `insight` for L3 — the two well-known namespaces every cluster has. The `*-secret-template.yaml` template files live next to their sealed counterparts and carry the same target namespace.
-- **The umbrella chart lives in `cyberfabric/insight` and is published per merge to `oci://ghcr.io/cyberfabric/charts/insight`.** The gitops repo is settings-only — values, sealed secrets, the Makefile, the poller. It does **not** vendor the chart and does **not** require a local checkout of `cyberfabric/insight`. The Makefile pulls the chart from OCI at deploy time, pinned to the version in `.insight-version`.
+- **The umbrella chart lives in `constructorfabric/insight` and is published per merge to `oci://ghcr.io/constructorfabric/charts/insight`.** The gitops repo is settings-only — values, sealed secrets, the Makefile, the poller. It does **not** vendor the chart and does **not** require a local checkout of `constructorfabric/insight`. The Makefile pulls the chart from OCI at deploy time, pinned to the version in `.insight-version`.
 - **System chart pins** live in the Makefile as variables (`MARIADB_VERSION`, `CLICKHOUSE_VERSION`, …) so a bump is a single deliberate edit.
 
 ## 8. Open Items
@@ -851,14 +851,14 @@ Conventions:
 These are accepted gaps that do not block the MVP but must be tracked.
 
 - **Public certificate rotation.** The sealed-secrets-controller rotates its keypair periodically; when it does, the committed `pub-cert.pem` files go stale and previously sealed secrets continue to decrypt (old keys are kept), but new ones must be sealed against the new cert. Procedure: `kubeseal --fetch-cert > environments/<env>/pub-cert.pem`, commit, re-seal any in-flight changes. A scheduled monthly check is appropriate; not yet automated.
-- **Promotion-MR poller for non-`dev` envs.** Currently only `dev` is auto-bumped. For internal `stage`/`test` and every customer-named cluster (`virtuozzo`, `constructor`, `acronis`, …), the team may want a "dry-run" poller that opens a merge request rather than committing to `main`. Captured but not yet designed.
+- **Promotion-MR poller for non-`dev` envs.** Currently only `dev` is auto-bumped. For internal `stage`/`test` and every customer-named cluster (`acme`, `globex`, …), the team may want a "dry-run" poller that opens a merge request rather than committing to `main`. Captured but not yet designed.
 - **Migration to in-cluster ArgoCD.** The Makefile-driven manual deploy is an MVP shortcut. Once a managed ArgoCD instance is provisioned inside the corporate network, the same `infra/insight-gitops` repo becomes its source. The contract (one `values.yaml` per environment, sealed secrets per namespace) is designed to survive that migration unchanged; only the trigger mechanism changes from `make deploy` to ArgoCD reconciliation.
-- **Artifact signing (images + chart).** Neither GHCR images nor the umbrella Helm chart at `oci://ghcr.io/cyberfabric/charts/insight` are signed today. The deploy admits any image tag the poller resolves and any chart version `.insight-version` pins. Follow-up: cosign-sign both at publish time, have `make chart-present` verify the chart signature before allowing deploy, and add `cosign verify` to the cluster admission policy for images.
+- **Artifact signing (images + chart).** Neither GHCR images nor the umbrella Helm chart at `oci://ghcr.io/constructorfabric/charts/insight` are signed today. The deploy admits any image tag the poller resolves and any chart version `.insight-version` pins. Follow-up: cosign-sign both at publish time, have `make chart-present` verify the chart signature before allowing deploy, and add `cosign verify` to the cluster admission policy for images.
 - **Audit log of deploys.** `make deploy` writes a local log file; there is no central audit. A trivial follow-up posts the log to a `#deploys` Slack channel via the poller's bot token; deferred until the team needs it.
 - **Rollback-by-tag.** `make rollback` calls `helm rollback` to the previous revision. Rolling back to an arbitrary historical state is `git checkout <deploy-tag> && make deploy`, which works but has not been rehearsed.
 - **Cross-namespace defaults in the umbrella.** The umbrella keeps its infra subcharts gated by `<service>.deploy: true|false` (see [§1.5 dual-purpose umbrella](#15-layer-model)). For the gitops production case (`.deploy: false`), the app's connection helpers must default the host to `<release>.insight-infra.svc.cluster.local` when no explicit `<service>.host` is supplied — so a values file that only says `<service>.deploy: false` "just works" against `insight-infra`. Verify the helpers do this; if not, a small chart-template change is needed. Also document the dual-purpose intent in `charts/insight/README.md` so external chart consumers understand the toggle.
 - **dev-up.sh Airbyte/Argo namespace.** `dev-up.sh` installs Airbyte and Argo Workflows into the same namespace as the umbrella (`insight` for local). Production gitops puts them in `insight-infra`. The chart values surface for both is identical (Airbyte API URL, Argo SA name) — confirm by render. If anything still hard-codes the `insight` namespace in templates, parameterise it.
 - **L2 chart-pin policy.** System service chart versions (`MARIADB_VERSION`, `CLICKHOUSE_VERSION`, etc.) are Makefile constants today; bumping is a deliberate PR. A future enhancement: split each service's pin into its own `system/<service>/.version` file (mirroring `.insight-version`) so a poller could pre-flight version compatibility against published Bitnami / Redpanda / Airbyte releases. Out of scope for v0.
-- **Per-cluster L2 inventory.** When a cluster swaps a self-hosted service for a managed endpoint (e.g. virtuozzo uses RDS instead of `system/mariadb`), the gitops repo currently has no machine-readable record of "this cluster runs MariaDB on-cluster vs. external." A small `environments/<env>/inventory.yaml` listing which `system-*` targets to run on this cluster would make `make doctor` able to validate that the cluster matches the expected inventory, and would make it possible to render a per-customer install runbook from the repo. Captured.
+- **Per-cluster L2 inventory.** When a cluster swaps a self-hosted service for a managed endpoint (e.g. a managed database instead of `system/mariadb`), the gitops repo currently has no machine-readable record of "this cluster runs MariaDB on-cluster vs. external." A small `environments/<env>/inventory.yaml` listing which `system-*` targets to run on this cluster would make `make doctor` able to validate that the cluster matches the expected inventory, and would make it possible to render a per-customer install runbook from the repo. Captured.
 
 - **Per-service database provisioning works only when `mariadb.deploy=true`.** The umbrella chart's `templates/mariadb-initdb-scripts.yaml` ConfigMap creates per-service databases (currently `identity` per ADR-0006; future services as they land) via Bitnami's `primary.initdbScriptsConfigMap` — which the bundled MariaDB only runs on **first pod boot**. In the gitops layered model (`mariadb.deploy=false` + external L2 MariaDB), the ConfigMap is not emitted at all, leaving the gitops repo with a choice between (a) mirroring the chart's per-service DB list into `system/mariadb/values.yaml` — couples gitops to chart, breaks every time a new per-service DB lands in the chart — or (b) the engineer creates each DB manually. Neither is good. **Proper fix**: emit a Helm pre-install/pre-upgrade hook Job from the umbrella that runs against `mariadb.host:mariadb.port` (bundled or external) using `mariadb-root-password` from `insight-db-creds`, executing `CREATE DATABASE IF NOT EXISTS` + `GRANT` for every per-service DB the chart's values declare. Engineers in gitops mode pre-create `insight-db-creds` with `mariadb-root-password` included (currently they only seal `mariadb-password` + `clickhouse-password` + `redis-password`). The chart's previous `identity-db-init-job.yaml` had this shape and was rolled back over a credential-timing bug with a regular-template Secret — fix the hook ordering and bring it back, parameterised on the per-service DB list.

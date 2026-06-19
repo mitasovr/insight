@@ -180,7 +180,7 @@ These were in earlier drafts and deliberately deferred:
 
 - [`PRD.md`](./PRD.md) — the canonical requirements document with IDs, acceptance criteria, and traceability markers.
 - [`../../../dashboard-configurator/specs/PRD.md`](../../../dashboard-configurator/specs/PRD.md) — sibling PRD for the Dashboard Configurator. Its `role_catalog` and team-identifier conventions are what the catalog references via string columns in v1.
-- GitHub PR [#225](https://github.com/cyberfabric/insight/pull/225) — review history and discussion trail.
+- GitHub PR [#225](https://github.com/constructorfabric/insight/pull/225) — review history and discussion trail.
 
 ---
 

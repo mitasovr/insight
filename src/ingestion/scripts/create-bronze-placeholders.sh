@@ -221,11 +221,71 @@ CREATE TABLE IF NOT EXISTS silver.class_ai_dev_usage (
     spec_lines           Nullable(Float64),
     session_count        Nullable(Float64),
     total_chat_messages  Nullable(Float64),
-    cost_cents           Nullable(Float64),
-    prs_with_cc_count    Nullable(Float64),
-    prs_total_count      Nullable(Float64),
+    cost_cents           Nullable(UInt32),
+    prs_with_cc_count    Nullable(UInt32),
+    prs_total_count      Nullable(UInt32),
     _version             UInt64
 ) ENGINE = ReplacingMergeTree(_version) ORDER BY (email, day) COMMENT 'INSIGHT_PLACEHOLDER_v1';
+SQL
+fi
+
+# silver.class_ai_overage — per-seat AI spend-vs-limit (Claude Team). Referenced
+# by the cc_overage branch of the ai_bullet_rows gold view
+# (20260618000000_ai-claude-team-overage-gold.sql); without this placeholder
+# CREATE VIEW fails at migration time (CH 24.x validates view source tables) in
+# any env where dbt hasn't built the silver model yet.
+if ! ch_table_exists silver class_ai_overage; then
+  echo "  Creating placeholder: silver.class_ai_overage"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS silver.class_ai_overage (
+    insight_tenant_id    String,
+    source_id            String,
+    unique_key           String,
+    email                String,
+    account_id           String,
+    period_month         Date,
+    tool                 String,
+    seat_tier            Nullable(String),
+    currency             String,
+    credit_limit_cents   Nullable(UInt32),
+    used_amount_cents    UInt32,
+    overage_cents        Nullable(UInt32),
+    is_over_limit        Nullable(UInt8),
+    is_enabled           Nullable(UInt8),
+    overage_metrics_json String,
+    source               String,
+    data_source          String,
+    collected_at         DateTime,
+    _version             UInt64
+) ENGINE = ReplacingMergeTree(_version) ORDER BY (email, period_month) COMMENT 'INSIGHT_PLACEHOLDER_v1';
+SQL
+fi
+
+# silver.class_support_activity — support (Zendesk) dbt model. Referenced by the
+# support_bullet_rows gold view (20260611000000_support-bullet-rows.sql); without
+# this placeholder CREATE VIEW fails at migration time (CH 24.x validates view
+# source tables) in any env where dbt hasn't built the silver model yet.
+if ! ch_table_exists silver class_support_activity; then
+  echo "  Creating placeholder: silver.class_support_activity"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS silver.class_support_activity (
+    tenant_id           String,
+    insight_source_id   String,
+    unique_key          String,
+    data_source         String,
+    person_key          String,
+    email               String,
+    date                Date,
+    updates             Nullable(UInt32),
+    public_comments     Nullable(UInt32),
+    private_comments    Nullable(UInt32),
+    solved              Nullable(UInt32),
+    kb_articles_created Nullable(UInt32),
+    csat_good           UInt32,
+    csat_total          UInt32,
+    collected_at        DateTime,
+    _version            UInt64
+) ENGINE = ReplacingMergeTree(_version) ORDER BY (person_key, date) COMMENT 'INSIGHT_PLACEHOLDER_v1';
 SQL
 fi
 

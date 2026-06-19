@@ -8,7 +8,7 @@ namespace Insight.Identity.Tests.Integration;
 
 /// <summary>
 /// Integration tests for <c>org_chart</c> reads.
-/// Phase 1 of cyberfabric/cyber-insight#348 — verifies that
+/// Phase 1 of constructorfabric/insight#348 — verifies that
 /// <see cref="PersonsRepository.GetCurrentParentsAsync"/> and
 /// <see cref="PersonsRepository.GetCurrentChildrenAsync"/> return the
 /// CURRENT edges only (<c>valid_to IS NULL</c>), are tenant-scoped, and

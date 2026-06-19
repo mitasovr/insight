@@ -117,6 +117,36 @@ global:
   # templates read `.Values.global.tenantDefaultId` directly.
   tenantDefaultId: ""
 # ═══════════════════════════════════════════════════════════════════════════
+#  OBSERVABILITY — logs & traces EMISSION (the product contract)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Insight ALWAYS emits structured JSON to stdout — that is the product
+# contract and is not toggleable. WHETHER it ALSO exports OTLP, and WHERE,
+# is driven entirely by `otlp.endpoint`:
+#
+#   endpoint: ""   — stdout only. No OTEL_* vars are published; whoever
+#                    runs the cluster collects stdout (the host's own node
+#                    agent, or the Loki/Alloy/Grafana stack installed via
+#                    the deploy pipeline's system layer). SAFE DEFAULT for
+#                    a drop into an unknown existing cluster.
+#   endpoint: set  — services additionally export OTLP there: the
+#                    in-cluster Alloy for a self-hosted stack
+#                    (http://alloy.insight-infra.svc.cluster.local:4317),
+#                    or the customer's own collector.
+#
+# The umbrella NEVER installs the collector stack — like Airbyte and Argo
+# it is separate releases, driven by the deploy pipeline (inventory
+# toggles; see deploy/gitops/system/README.md). This block only governs what
+# services EMIT. The values are published into the `{release}-platform`
+# ConfigMap as INSIGHT_LOG_LEVEL / OTEL_* env vars, so every pod that does
+# `envFrom` picks them up uniformly — no per-service wiring.
+observability:
+  logs:
+    level: info # debug|info|warn|error — default level for all services
+  otlp:
+    endpoint: "" # empty = stdout only; set = services export OTLP here
+    protocol: grpc # grpc | http/protobuf
+# ═══════════════════════════════════════════════════════════════════════════
 #  EXTERNAL — Airbyte (installed as a separate Helm release, SAME namespace)
 # ═══════════════════════════════════════════════════════════════════════════
 airbyte:
@@ -162,7 +192,7 @@ ingestion:
   # `serviceaccount "argo-workflow" not found`.
   templates:
     enabled: true
-  toolboxImage: "ghcr.io/constructorfabric/insight-toolbox:2026.06.09.08.37-2ce7054" # e.g. "ghcr.io/constructorfabric/insight-toolbox:2026.04.28.10.34-b08b460"
+  toolboxImage: "ghcr.io/constructorfabric/insight-toolbox:2026.06.19.14.30-b0be27f" # e.g. "ghcr.io/constructorfabric/insight-toolbox:2026.04.28.10.34-b08b460"
   # airbyte-sync poll-job tunables — see templates/ingestion/airbyte-sync.yaml.
   # The poll loop replaces a wall-clock deadline with a progress watchdog:
   # it tracks (status, bytesEmitted, recordsEmitted, stateMessagesEmitted)
@@ -172,6 +202,21 @@ ingestion:
   airbyteSync:
     pollIntervalSeconds: 30
     idleThresholdSeconds: 1800 # 30 min without any byte/record/state movement → fail
+  # Data-quality checks: a CronWorkflow runs the dbt check catalog (the
+  # `data_quality` selector — tests tagged data_quality, not every dbt test) on
+  # a schedule, independent of the per-connector pipeline. See
+  # templates/ingestion/data-quality-cron.yaml and data-quality-test.yaml.
+  # Each check emits a JSON finding to stdout for the central log store.
+  # Checks are non-blocking (severity=warn) so a finding never freezes
+  # ingestion.
+  dataQuality:
+    enabled: true
+    schedule: "0 6 * * *" # daily 06:00 UTC, after overnight connector syncs
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    ttlSecondsAfterCompletion: 1800
+    ttlSecondsAfterSuccess: 600
+    ttlSecondsAfterFailure: 3600
   # Reconcile loop: descriptor-driven Airbyte connector reconciliation,
   # cron-scheduled inside the cluster (see templates/ingestion/reconcile-cron.yaml).
   reconcile:
@@ -181,23 +226,9 @@ ingestion:
     destinationName: "" # Optional: name of the Bronze destination managed by reconcile. Default `clickhouse-bronze`.
     argoInstanceId: "" # Optional. Set only if the cluster's Argo workflow controller runs with `instanceID:` configured (e.g. "argo-workflows-insight" on dev-vhc). Empty leaves the controller-instanceid label off — controllers without instanceID accept that.
     tenantId: "" # Set to the Insight tenant slug (used in source/connection names per ADR-0005). No silent default.
-    logs:
-      # `persistent: false` → reconcile-loop CronWorkflow pods write logs
-      # to an emptyDir mounted at /var/log/insight; logs survive only
-      # until pod GC. Sufficient for dev/test where the Argo controller's
-      # pod-log archive is the source of record for debugging.
-      #
-      # `persistent: true` → chart provisions a PVC at deploy time.
-      # REQUIREMENT: the StorageClass referenced (either explicit
-      # `storageClass` or the cluster default) MUST use
-      # `volumeBindingMode: Immediate` — workflow pods only exist while
-      # a Workflow is running, so a `WaitForFirstConsumer` class leaves
-      # the PVC Pending forever, blocking `helm --wait`. Production
-      # operators wanting cross-run log persistence should either
-      # provide an Immediate-binding StorageClass or accept emptyDir.
-      persistent: false
-      size: 5Gi
-      storageClass: ""
+    # NB: the old `logs:` block (PVC/emptyDir file logger at
+    # /var/log/insight) is gone — reconcile emits structured JSON to
+    # stdout and the cluster's log collector is the durable destination.
     resources:
       requests:
         cpu: "100m"

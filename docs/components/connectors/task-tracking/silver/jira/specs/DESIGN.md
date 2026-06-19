@@ -438,7 +438,7 @@ Snapshot of current issue state. Used for reverse-apply when an issue is first i
 
 - [ ] `p2` - **ID**: `cpt-insightspec-topology-jira-enrich`
 
-- Container image: `ghcr.io/cyberfabric/insight-jira-enrich:<version>` (distroless base).
+- Container image: `ghcr.io/constructorfabric/insight-jira-enrich:<version>` (distroless base).
 - Argo `WorkflowTemplate`: `tt-enrich-jira-run` (new).
 - Invoked between `dbt-run` (tag:silver_step1) and `dbt-run` (tag:silver_step2) in `ingestion-pipeline`.
 - CPU/memory requests: 500m / 1Gi; limits 2 / 2Gi.

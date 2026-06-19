@@ -183,7 +183,7 @@ visible row is well-formed per the routing rules in ADR-0007.
   `PersonResponse` with parent attributes (`parent_email`,
   `parent_id`, `parent_person_id`) but no recursive subordinate
   expansion. Preserved unchanged by Phase 2.
-- `POST /v1/profiles` (Phase 2, cyberfabric/cyber-insight#347)
+- `POST /v1/profiles` (Phase 2, constructorfabric/insight#347)
   — single-profile lookup by either email (across all sources) or
   source-native id (within one source instance), returning a
   `ProfileResponse` with the full `ids[]` list of current
@@ -203,7 +203,7 @@ visible row is well-formed per the routing rules in ADR-0007.
 ### 4.2 Out of Scope
 
 - Recursive subordinate expansion via `parent_person_id` —
-  cyberfabric/cyber-insight#348 (GET subchart) lands separately.
+  constructorfabric/insight#348 (GET subchart) lands separately.
 - Real JWT-claim validation (Phase 2.5 — `JwtTenantContext` is wired
   in DI as a stub, returns `null`; api-gateway BFF forwarding lands
   this).
@@ -212,12 +212,12 @@ visible row is well-formed per the routing rules in ADR-0007.
   extension.
 - Temporal "as-of" queries by date range — Phase 3.
 - Write path (`POST /v1/resolve` golden-record bootstrap) —
-  cyberfabric/cyber-insight#349.
+  constructorfabric/insight#349.
 - Writing observations into `persons` (owned by the seed pipeline
   and a future reconciliation service).
 - Merge / split workflows on person identities.
 - OIDC subject mapping, org_units, memberships, user_identities,
-  user_roles tables — tracked separately under cyberfabric/cyber-insight#80.
+  user_roles tables — tracked separately under constructorfabric/insight#80.
 
 ## 5. Functional Requirements
 
@@ -367,7 +367,7 @@ row on the same partition do not contribute.
 **Rationale**: Phase 1 GET endpoint is limited to email lookup; the
 analytics front-end and internal workflows need to resolve by other
 identifier types (source-native id especially for the
-person-by-source workflows in cyberfabric/cyber-insight#344). POST
+person-by-source workflows in constructorfabric/insight#344). POST
 with a structured body keeps the contract extensible for Phase 3
 date-range filtering without further URL gymnastics.
 
@@ -539,7 +539,7 @@ removes a fragile per-caller contract.
 
 ### 5.5 Parent/child edge cache
 
-Phase 1 of cyberfabric/cyber-insight#348 — storage layer for
+Phase 1 of constructorfabric/insight#348 — storage layer for
 organisational tree relationships. No API surface change in Phase 1;
 the cache is read by Phase 2 endpoint enrichment and Phase 3 subchart
 walks.

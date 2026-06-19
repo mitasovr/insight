@@ -543,6 +543,6 @@ For connector credential rotation, the same flow applies — edit `secrets/conne
 | `ENV` | `local` | `local` (Kind) or `production` (existing K8s cluster) |
 | `KUBECONFIG` | `~/.kube/insight.kubeconfig` | Path to kubeconfig |
 | `TOOLBOX_IMAGE_TAG` | `$IMAGE_TAG` | Tag for toolbox image (uses same registry as other services) |
-| `TOOLBOX_IMAGE` | auto | Full image override, e.g. `ghcr.io/cyberfabric/insight-toolbox:2026.04.21.14.30-abc1234` |
+| `TOOLBOX_IMAGE` | auto | Full image override, e.g. `ghcr.io/constructorfabric/insight-toolbox:2026.04.21.14.30-abc1234` |
 
 The Argo workflow templates (`dbt-run`, `ingestion-pipeline`) also accept a `toolbox_image` parameter to override the image at submission time.

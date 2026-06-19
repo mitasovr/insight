@@ -174,10 +174,10 @@ They coexist. Devs keep using Helmfile locally for fast iteration; distribution 
 helm package charts/insight -d dist/
 
 # 2. Push to OCI registry (ghcr.io example)
-helm push dist/insight-0.1.0.tgz oci://ghcr.io/cyberfabric/charts
+helm push dist/insight-0.1.0.tgz oci://ghcr.io/constructorfabric/charts
 
 # 3. Customer install:
-helm upgrade --install insight oci://ghcr.io/cyberfabric/charts/insight \
+helm upgrade --install insight oci://ghcr.io/constructorfabric/charts/insight \
   --version 0.1.0 \
   --namespace insight --create-namespace \
   -f customer-values.yaml

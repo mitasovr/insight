@@ -2,7 +2,7 @@
 //! the CRM (sales-rep) bullet metrics — the next batch of FE constants to
 //! move under the "one source of truth = catalog" rule (follow-on to #82).
 //!
-//! Source: `cyberfabric/cyber-insight-front` `src/api/transforms.ts`
+//! Source: `constructorfabric/insight-front` `src/api/transforms.ts`
 //! `CRM_QUALITY_BULLETS` + `CRM_ACTIVITY_BULLETS` (the two compile-in
 //! arrays still feeding the sales-rep dashboard at the time this
 //! migration ships). The FE side hydrates from the wire once these rows

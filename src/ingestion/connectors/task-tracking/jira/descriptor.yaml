@@ -1,8 +1,17 @@
 name: jira
-version: "1.1.1"
+# 2.0.0 (major): project scope moved from the jira_project_keys allowlist to
+# runtime auto-discovery; per-project partitioning resets incremental state —
+# reconcile dispatches a full refresh on major bumps (ADR-0015), which is the
+# intended migration.
+# 2.0.1 (patch): force global_substream_cursor on jira_issue/jira_issue_keys —
+# 2.0.0's per-partition cursor did not persist, making every sync a full
+# re-sync. Bump required so reconcile republishes the manifest.
+# 2.0.2 (patch): widen jira_project_discovery cursor_datetime_formats so it can
+# parse child-stream cursor values carried in parent_state (was crashing with
+# "No format ['%Y-%m-%dT%H:%M:%S.%f%z'] matching 2026-06-15 02:00").
+version: "2.0.2"
 schedule: "0 3 * * *"
 workflow: sync
-
 # CI build metadata + runtime image refs (ADR-0016). The `images:` block is
 # the sole source of truth: CI scans it via dynamic discovery to know what
 # to build, and reconcile reads images.enrich.image to pass to the
@@ -15,15 +24,13 @@ images:
     name: insight-jira-enrich
     dockerfile: ./enrich/Dockerfile
     context: ./enrich
-    image: "ghcr.io/cyberfabric/insight-jira-enrich:2026.05.22.13.03-5cdda7c"
-
+    image: "ghcr.io/constructorfabric/insight-jira-enrich:2026.06.10.11.55-376321d"
 # Silver routing (class_task_*) is delivered by the task-tracking Silver layer
 # package, not by this connector. The pipeline runs the jira-rust path:
 # dbt(tag:jira) → tt-enrich-jira-run → dbt(tag:silver,tag:jira+). This
 # selector is the third step — only silver models that union jira staging
 # (class_task_*), not the full silver layer. See DESIGN §1.1 and §3.2.
 dbt_select: "tag:silver,tag:jira+"
-
 connection:
   namespace: bronze_jira
 secret:
@@ -31,4 +38,3 @@ secret:
     - jira_instance_url
     - jira_email
     - jira_api_token
-    - jira_project_keys

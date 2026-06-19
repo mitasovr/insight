@@ -15,7 +15,7 @@
 //! ⚠️  FE visibility note: these three keys are backend-computed and stored
 //! in the catalog to register their label / unit / threshold metadata.
 //! They will not appear in the UI until the corresponding `BULLET_DEFS`
-//! entries are added to `cyber-insight-front` (tracked as a follow-up to
+//! entries are added to `insight-front` (tracked as a follow-up to
 //! INSIGHT-458). The catalog rows are a prerequisite, not a substitute, for
 //! that work.
 //!

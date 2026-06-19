@@ -7,7 +7,7 @@ namespace Insight.Identity.Tests.Integration;
 /// <summary>
 /// Regression tests for the SCD2 active-intervals CTE used by
 /// `seed-persons-from-identity-input.py` step 9 (ADR-0010 Phase 1 of
-/// cyberfabric/cyber-insight#348).
+/// constructorfabric/insight#348).
 ///
 /// These tests target the algorithmic core of the rebuild SQL — the
 /// `state_log` / `state_transitions` / `active_intervals` CTE chain
