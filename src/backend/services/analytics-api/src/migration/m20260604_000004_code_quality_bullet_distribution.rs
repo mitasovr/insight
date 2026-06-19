@@ -1,24 +1,20 @@
-//! Add cohort distribution (p25/p75 + size `n`) to the Team Bullet Code
-//! Quality `query_ref`, on top of the wide-aggregate + `ARRAY JOIN` shape
-//! introduced by `m20260520_000001_code_quality_bullet_rewrite`.
+//! Seed the Team Bullet Code Quality `query_ref` (`…0004`), on top of the
+//! wide-aggregate + `ARRAY JOIN` shape from
+//! `m20260520_000001_code_quality_bullet_rewrite`, with cohort distribution
+//! (p25/p50/p75 + size `n`).
 //!
-//! The company-side aggregation gains `company_p25` / `company_p75`
-//! (`quantileExact(0.25|0.75)`) and `company_n` (`count(v_period)`),
-//! surfaced on the outer SELECT as `p25`/`p75`/`n`, so the FE can render
-//! the interquartile band and the cohort size. Over the all-NULL
-//! `ComingSoon` columns (`prs_per_dev` / `pr_cycle_time` /
-//! `build_success`) the quantiles yield NULL and the count yields 0 — the
-//! honest-NULL → `ComingSoon` contract is preserved. The cohort stays
-//! company-wide.
+//! Team-only: there is no IC code-quality metric. The team bullet blends each
+//! roster member's DEPARTMENT cohort — the cohort SELECT carries `org_unit_id`,
+//! groups per `(metric_key, org_unit_id)`, and the outer blends via
+//! `avg(c.company_*)` (the `company_*` aliases are kept since there is no IC
+//! variant to mirror). Over the all-NULL `ComingSoon` columns the quantiles
+//! yield NULL and the count yields 0 — the honest-NULL → `ComingSoon` contract
+//! is preserved.
 //!
-//! Team-only: there is no `IC_BULLET_CODE_QUALITY` metric in the seed
-//! (`m20260422_000001_seed_metrics`) — only the Team-scope `…04` exists.
-//!
-//! Team value scoping is done by the handler's `person_id IN (roster)`
-//! filter, so the query keeps the original `GROUP BY metric_key` shape —
-//! no supervisor join. Both leaves still `GROUP BY person_id`, so
-//! `inject_date_filter_into_subqueries` injects the `metric_date` range
-//! before each GROUP BY exactly as before.
+//! Roster scoping is done by the handler's `person_id IN (roster)` filter, so
+//! the query keeps `GROUP BY p.metric_key` — no supervisor join. Both leaves
+//! `GROUP BY person_id`, so `inject_date_filter_into_subqueries` injects the
+//! `metric_date` range before each GROUP BY.
 
 use sea_orm_migration::prelude::*;
 
@@ -63,12 +59,12 @@ fn team_query() -> String {
     format!(
         "SELECT p.metric_key AS metric_key, \
                 avg(p.v_period) AS value, \
-                any(c.company_median) AS median, \
-                any(c.company_min) AS range_min, \
-                any(c.company_max) AS range_max, \
-                any(c.company_p25) AS p25, \
-                any(c.company_p75) AS p75, \
-                any(c.company_n) AS n \
+                avg(c.company_median) AS median, \
+                avg(c.company_min) AS range_min, \
+                avg(c.company_max) AS range_max, \
+                avg(c.company_p25) AS p25, \
+                avg(c.company_p75) AS p75, \
+                toFloat64(count(p.v_period)) AS n \
          FROM ( \
              SELECT person_id, org_unit_id, \
                     kv.1 AS metric_key, kv.2 AS v_period \
@@ -76,7 +72,7 @@ fn team_query() -> String {
              {kv} \
          ) p \
          LEFT JOIN ( \
-             SELECT metric_key, \
+             SELECT metric_key, org_unit_id, \
                     quantileExact(0.5)(v_period) AS company_median, \
                     min(v_period) AS company_min, \
                     max(v_period) AS company_max, \
@@ -84,12 +80,13 @@ fn team_query() -> String {
                     quantileExact(0.75)(v_period) AS company_p75, \
                     count(v_period) AS company_n \
              FROM ( \
-                 SELECT kv.1 AS metric_key, kv.2 AS v_period \
+                 SELECT person_id, org_unit_id, \
+                        kv.1 AS metric_key, kv.2 AS v_period \
                  FROM ({pp}) ppc \
                  {kv} \
              ) inner_c \
-             GROUP BY metric_key \
-         ) c ON c.metric_key = p.metric_key \
+             GROUP BY metric_key, org_unit_id \
+         ) c ON c.metric_key = p.metric_key AND c.org_unit_id = p.org_unit_id \
          GROUP BY p.metric_key"
     )
 }
@@ -243,42 +240,45 @@ mod tests {
     fn team_query_shape() {
         let q = team_query();
         assert_query_shape(&q, "team_query");
-        // Team-scope: company-wide range (no IC variant exists for this
-        // section, so no team_* labels should appear).
+        // Department-scoped blend: the cohort keeps the company_* aliases
+        // (no IC variant to mirror) but groups per (metric_key, org_unit_id),
+        // joins on org_unit_id, and blends via avg(c.company_*).
         assert!(
-            q.contains("company_median") && q.contains("company_min") && q.contains("company_max"),
-            "team_query must expose company_* range, got:\n{q}"
+            q.contains("c.org_unit_id = p.org_unit_id"),
+            "team_query must join the department cohort on org_unit_id, got:\n{q}"
+        );
+        for col in ["median", "min", "max", "p25", "p75"] {
+            let blended = format!("avg(c.company_{col})");
+            assert!(
+                q.contains(&blended),
+                "team_query cohort column must blend via `{blended}`, got:\n{q}"
+            );
+        }
+        assert!(
+            !q.contains("any(c.company_") && !q.contains("team_median"),
+            "team_query must NOT use any(c.company_…) or team_* labels, got:\n{q}"
         );
         assert!(
-            !q.contains("team_median"),
-            "team_query must NOT use team_median (no IC variant for code quality)"
-        );
-        assert!(
-            q.contains("ON c.metric_key = p.metric_key"),
-            "team_query JOIN must be on metric_key alone"
+            q.contains("GROUP BY metric_key, org_unit_id"),
+            "team_query cohort must group per metric_key, org_unit_id, got:\n{q}"
         );
 
-        // Roster scoping happens at the handler (`person_id IN (...)`), so
-        // the query stays company-wide + groups by metric_key only — no
-        // supervisor join, no supervisor_email column.
+        // Roster scoping happens at the handler (`person_id IN (...)`), so the
+        // outer groups by metric_key — no supervisor join.
         assert!(
             q.contains("GROUP BY p.metric_key"),
             "team_query outer GROUP BY must be metric_key, got:\n{q}"
         );
         assert!(
-            !q.contains("supervisor_email"),
-            "team_query must NOT reference supervisor_email (roster scope is at the handler)"
-        );
-        assert!(
-            !q.contains("insight.people"),
-            "team_query must NOT join insight.people"
+            !q.contains("supervisor_email") && !q.contains("insight.people"),
+            "team_query must NOT join insight.people / supervisor_email, got:\n{q}"
         );
     }
 
-    /// Cohort quartiles + size: the company-side aggregation must expose
-    /// `company_p25` / `company_p75` (`quantileExact(0.25|0.75)`) and
-    /// `company_n` (`count(v_period)`), surfaced on the outer SELECT as
-    /// `p25` / `p75` / `n`.
+    /// Cohort quartiles + size: the department-scoped aggregation keeps the
+    /// `company_p25` / `company_p75` / `company_n` cohort aliases, blended on
+    /// the outer SELECT via `avg(c.company_*)`; cohort size is the roster's
+    /// contributing rows.
     #[test]
     fn team_query_exposes_cohort_distribution() {
         let q = team_query();
@@ -293,9 +293,9 @@ mod tests {
             );
         }
         for col in [
-            "any(c.company_p25) AS p25",
-            "any(c.company_p75) AS p75",
-            "any(c.company_n) AS n",
+            "avg(c.company_p25) AS p25",
+            "avg(c.company_p75) AS p75",
+            "toFloat64(count(p.v_period)) AS n",
         ] {
             assert!(
                 q.contains(col),

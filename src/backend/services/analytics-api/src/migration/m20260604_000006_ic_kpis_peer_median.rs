@@ -21,6 +21,15 @@
 //! injects ` WHERE metric_date >= … AND metric_date <= …` before each
 //! `GROUP BY person_id`, so both the value and the cohort are bounded to the
 //! selected period.
+//!
+//! This migration also drops two now-redundant standalone metrics, made
+//! obsolete by the peer-cohort consolidation:
+//!   - `…0037` `IC KPI Peer Median` — its medians are folded into `…0010` above;
+//!   - `…0034` `Peer Cohort Stats` — its per-bullet distribution is now carried
+//!     on each bullet row (`m20260604_00000{1,2,4}` + `m20260606_000001`).
+//!
+//! Both pair with ingestion drops of the backing views. `down()` restores the
+//! verbatim rows seeded by `m20260527_000002_seed_metric_views`.
 
 use sea_orm_migration::prelude::*;
 
@@ -28,6 +37,24 @@ use sea_orm_migration::prelude::*;
 pub struct Migration;
 
 const IC_KPIS_ID: &str = "00000000000000000001000000000010";
+
+const ZERO_TENANT: &str = "00000000000000000000000000000000";
+
+/// `Peer Cohort Stats` (`…0034`) — dropped here; restored verbatim by `down()`
+/// from `m20260527_000002_seed_metric_views`.
+const PEER_COHORT_STATS_ID: &str = "00000000000000000001000000000034";
+const PEER_COHORT_STATS_NAME: &str = "Peer Cohort Stats";
+const PEER_COHORT_STATS_DESC: &str =
+    "Aggregate percentiles per metric across a cohort (kind=ic|team). No per-person rows.";
+const PEER_COHORT_STATS_QR: &str = "SELECT cohort_seed, kind, metric_key, quantileExact(0.25)(p25) AS p25, quantileExact(0.5)(p50) AS p50, quantileExact(0.75)(p75) AS p75, min(min) AS min, max(max) AS max, max(n) AS n FROM insight.peer_cohort_stats GROUP BY cohort_seed, kind, metric_key";
+
+/// `IC KPI Peer Median` (`…0037`) — dropped here; restored verbatim by `down()`
+/// from `m20260527_000002_seed_metric_views`.
+const IC_KPI_PEER_MEDIAN_ID: &str = "00000000000000000001000000000037";
+const IC_KPI_PEER_MEDIAN_NAME: &str = "IC KPI Peer Median";
+const IC_KPI_PEER_MEDIAN_DESC: &str =
+    "Per-supervisor cohort percentiles (p25/p50/p75/n) for each IC KPI key.";
+const IC_KPI_PEER_MEDIAN_QR: &str = "SELECT cohort_seed, kpi_key, quantileExact(0.25)(person_total) AS p25, quantileExact(0.5)(person_total) AS p50, quantileExact(0.75)(person_total) AS p75, uniqExact(person_id) AS n FROM (SELECT supervisor_email AS cohort_seed, person_id, kpi_key, multiIf(kpi_key IN ('bugs_fixed','tasks_closed','prs_merged','ai_sessions'), sum(value), avg(value)) AS person_total FROM insight.ic_kpi_peer_median GROUP BY supervisor_email, person_id, kpi_key) GROUP BY cohort_seed, kpi_key";
 
 /// Per-person rollup over `insight.ic_kpis` (daily rows → one row per
 /// person for the period). Reused verbatim for both the value row (`k`)
@@ -106,6 +133,11 @@ impl MigrationTrait for Migration {
             qr = new_query().replace('\'', "''"),
         ))
         .await?;
+        // Drop the now-redundant standalone peer-cohort metrics.
+        for id in [PEER_COHORT_STATS_ID, IC_KPI_PEER_MEDIAN_ID] {
+            db.execute_unprepared(&format!("DELETE FROM metrics WHERE id = UNHEX('{id}')"))
+                .await?;
+        }
         Ok(())
     }
 
@@ -116,6 +148,30 @@ impl MigrationTrait for Migration {
             qr = old_query().replace('\'', "''"),
         ))
         .await?;
+        // Restore the verbatim rows the drops removed (seeded by
+        // m20260527_000002_seed_metric_views).
+        for (id, name, description, qr) in [
+            (
+                PEER_COHORT_STATS_ID,
+                PEER_COHORT_STATS_NAME,
+                PEER_COHORT_STATS_DESC,
+                PEER_COHORT_STATS_QR,
+            ),
+            (
+                IC_KPI_PEER_MEDIAN_ID,
+                IC_KPI_PEER_MEDIAN_NAME,
+                IC_KPI_PEER_MEDIAN_DESC,
+                IC_KPI_PEER_MEDIAN_QR,
+            ),
+        ] {
+            db.execute_unprepared(&format!(
+                "INSERT INTO metrics (id, insight_tenant_id, name, description, query_ref, is_enabled) \
+                 VALUES (UNHEX('{id}'), UNHEX('{ZERO_TENANT}'), '{name}', '{description}', '{qr}', 1) \
+                 ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), query_ref=VALUES(query_ref), is_enabled=VALUES(is_enabled)",
+                qr = qr.replace('\'', "''"),
+            ))
+            .await?;
+        }
         Ok(())
     }
 }
@@ -179,5 +235,15 @@ mod tests {
             !old_query().contains("_median"),
             "predecessor had no peer medians"
         );
+    }
+
+    #[test]
+    fn folds_the_two_redundant_metric_drops() {
+        // The two standalone peer-cohort metrics this migration retires.
+        assert_eq!(PEER_COHORT_STATS_ID, "00000000000000000001000000000034");
+        assert_eq!(IC_KPI_PEER_MEDIAN_ID, "00000000000000000001000000000037");
+        // down() restores their verbatim backing queries.
+        assert!(PEER_COHORT_STATS_QR.contains("FROM insight.peer_cohort_stats"));
+        assert!(IC_KPI_PEER_MEDIAN_QR.contains("FROM insight.ic_kpi_peer_median"));
     }
 }

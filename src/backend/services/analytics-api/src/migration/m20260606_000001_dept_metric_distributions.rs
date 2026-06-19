@@ -1,25 +1,28 @@
-//! Per-(department, metric) distribution metrics for the three bullet
-//! sections that already expose a cohort distribution to the bullet gauge
-//! (Task Delivery, Collaboration, Git). Each section's cohort subquery —
-//! the one the IC bullet already computes per `metric_key, org_unit_id` —
-//! is PROMOTED to the top level, keeping `org_unit_id` in the projection so
-//! the FE can read a department's quartile band for any metric in one row.
-//!
-//! Output columns are uniform across the three:
+//! Per-(department, metric) distribution metrics — the team view's cohort
+//! source: each member is colored against their own department's quartile band,
+//! and the section cards roll up per-member-vs-own-department standings. Five
+//! metrics, uniform output:
 //!   `org_unit_id, metric_key, p25, median, p75, range_min, range_max, n`.
+//!   - `…0044` Task Delivery, `…0045` Collaboration, `…0046` Git, `…0048` AI —
+//!     each promotes the section's per-person bullet rollup + ARRAY JOIN to the
+//!     top level, grouped per `(org_unit_id, metric_key)`.
+//!   - `…0047` Heatmap KPIs — the IC KPIs per-person rollup (`insight.ic_kpis`)
+//!     unpivoted to the five `team_row` keys (`tasks_closed`, `bugs_fixed`,
+//!     `prs_merged`, `focus_time_pct`, `ai_loc_share_pct`).
 //!
 //! The wide-aggregate + ARRAY JOIN blocks are copied verbatim from each
-//! section's distribution migration (`m20260604_00000{1,2,5}`) as
-//! self-contained module helpers, per the repo convention that a migration
-//! captures the exact SQL it installs rather than referencing another
-//! migration's private helpers (which may later change under it).
+//! section's source migration as self-contained module helpers, per the repo
+//! convention that a migration captures the exact SQL it installs.
 //!
-//! Both bullet-row leaves keep `GROUP BY person_id`, so
-//! `inject_date_filter_into_subqueries` injects the `metric_date` range before
-//! each per-person GROUP BY exactly as in the source migrations. The handler
-//! re-appends the outer `GROUP BY org_unit_id, metric_key`; an
-//! `org_unit_id IN (...)` filter lands in the outer WHERE against the
-//! promoted `org_unit_id` column.
+//! Caveat: the `…0047` `prs_merged` distribution inherits the known pre-#627 PR
+//! name-fallback attribution gap (not fixed here). The AI set uses the
+//! `*If(isNotNull(v_period))` family (NULL ratios skipped) and excludes the
+//! active-counter flags + all-NULL placeholders (no per-person distribution).
+//!
+//! Each leaf keeps `GROUP BY person_id`, so `inject_date_filter_into_subqueries`
+//! injects the `metric_date` range before the per-person GROUP BY; the handler
+//! re-appends the outer `GROUP BY org_unit_id, metric_key` and binds any
+//! `org_unit_id IN (...)` filter against the promoted `org_unit_id` column.
 
 use sea_orm_migration::prelude::*;
 
@@ -31,6 +34,8 @@ const ZERO_TENANT: &str = "00000000000000000000000000000000";
 const DEPT_DIST_DELIVERY_HEX: &str = "00000000000000000001000000000044";
 const DEPT_DIST_COLLAB_HEX: &str = "00000000000000000001000000000045";
 const DEPT_DIST_GIT_HEX: &str = "00000000000000000001000000000046";
+const DEPT_KPI_DIST_HEX: &str = "00000000000000000001000000000047";
+const DEPT_DIST_AI_HEX: &str = "00000000000000000001000000000048";
 
 // ── Task Delivery ───────────────────────────────────────────────────────
 
@@ -231,6 +236,119 @@ fn git_query() -> String {
     )
 }
 
+// ── Heatmap KPIs (insight.ic_kpis) ────────────────────────────────────────
+
+/// Per-person rollup over `insight.ic_kpis` (daily rows → one row per person
+/// for the period), copied verbatim from
+/// `m20260604_000006_ic_kpis_peer_median::per_person_rollup`. Surfaces
+/// `org_unit_id` (the department cohort key) alongside each per-person KPI.
+fn kpi_per_person_rollup() -> &'static str {
+    "SELECT person_id, any(org_unit_id) AS org_unit_id, \
+         sum(loc) AS loc, \
+         round(avg(ai_loc_share_pct), 1) AS ai_loc_share_pct, \
+         sum(prs_merged) AS prs_merged, \
+         avg(pr_cycle_time_h) AS pr_cycle_time_h, \
+         round(avg(focus_time_pct), 1) AS focus_time_pct, \
+         sum(tasks_closed) AS tasks_closed, \
+         sum(bugs_fixed) AS bugs_fixed, \
+         anyOrNull(build_success_pct) AS build_success_pct, \
+         sum(ai_sessions) AS ai_sessions \
+     FROM insight.ic_kpis \
+     GROUP BY person_id"
+}
+
+fn kpi_query() -> String {
+    let pp = kpi_per_person_rollup();
+    format!(
+        "SELECT org_unit_id, kv.1 AS metric_key, \
+                quantileExact(0.25)(kv.2) AS p25, \
+                quantileExact(0.5)(kv.2) AS median, \
+                quantileExact(0.75)(kv.2) AS p75, \
+                min(kv.2) AS range_min, \
+                max(kv.2) AS range_max, \
+                count(kv.2) AS n \
+         FROM ({pp}) pp \
+         ARRAY JOIN [ \
+             ('tasks_closed', toFloat64(tasks_closed)), \
+             ('bugs_fixed', toFloat64(bugs_fixed)), \
+             ('prs_merged', toFloat64(prs_merged)), \
+             ('focus_time_pct', toFloat64(focus_time_pct)), \
+             ('ai_loc_share_pct', toFloat64(ai_loc_share_pct)) \
+         ] AS kv \
+         GROUP BY org_unit_id, metric_key"
+    )
+}
+
+// ── AI (insight.ai_bullet_rows) ───────────────────────────────────────────
+
+/// Per-person AI wide aggregate, copied verbatim from `m20260606_000003`'s
+/// `ai_wide_aggregate_pp`. The active-counter / placeholder columns are
+/// computed but simply not unpivoted by `ai_array_join_kv` below.
+fn ai_wide_aggregate_pp() -> &'static str {
+    "SELECT person_id, any(org_unit_id) AS org_unit_id, \
+         sumIf(metric_value, metric_key = 'cursor_completions') AS cursor_completions_v, \
+         sumIf(metric_value, metric_key = 'cursor_agents') AS cursor_agents_v, \
+         sumIf(metric_value, metric_key = 'cursor_lines') AS cursor_lines_v, \
+         sumIf(metric_value, metric_key = 'cc_sessions') AS cc_sessions_v, \
+         sumIf(metric_value, metric_key = 'cc_lines') AS cc_lines_v, \
+         sumIf(metric_value, metric_key = 'cc_tool_accept') AS cc_tool_accept_v, \
+         sumIf(metric_value, metric_key = 'team_ai_loc') AS team_ai_loc_v, \
+         if(sumIf(metric_value, metric_key = 'cursor_offered') > 0, \
+            round(toFloat64(100) \
+                  * sumIf(metric_value, metric_key = 'cursor_completions') \
+                  / sumIf(metric_value, metric_key = 'cursor_offered'), 1), \
+            CAST(NULL AS Nullable(Float64))) AS cursor_acceptance_v, \
+         if(sumIf(metric_value, metric_key = 'cc_offered') > 0, \
+            round(toFloat64(100) \
+                  * sumIf(metric_value, metric_key = 'cc_tool_accept') \
+                  / sumIf(metric_value, metric_key = 'cc_offered'), 1), \
+            CAST(NULL AS Nullable(Float64))) AS cc_tool_acceptance_v, \
+         if(sumIf(metric_value, metric_key = 'cursor_total_lines') > 0, \
+            round(toFloat64(100) \
+                  * sumIf(metric_value, metric_key = 'cursor_lines') \
+                  / sumIf(metric_value, metric_key = 'cursor_total_lines'), 1), \
+            CAST(NULL AS Nullable(Float64))) AS ai_loc_share2_v \
+     FROM insight.ai_bullet_rows \
+     GROUP BY person_id"
+}
+
+/// ARRAY JOIN unpivot for the distributable AI keys only — active-counter flags
+/// and the all-NULL placeholders are intentionally excluded (see module doc).
+fn ai_array_join_kv() -> &'static str {
+    "ARRAY JOIN [ \
+         ('cursor_completions', cursor_completions_v), \
+         ('cursor_agents',      cursor_agents_v), \
+         ('cursor_lines',       cursor_lines_v), \
+         ('cc_sessions',        cc_sessions_v), \
+         ('cc_lines',           cc_lines_v), \
+         ('cc_tool_accept',     cc_tool_accept_v), \
+         ('team_ai_loc',        team_ai_loc_v), \
+         ('cursor_acceptance',  cursor_acceptance_v), \
+         ('cc_tool_acceptance', cc_tool_acceptance_v), \
+         ('ai_loc_share2',      ai_loc_share2_v) \
+     ] AS kv"
+}
+
+fn ai_query() -> String {
+    let pp = ai_wide_aggregate_pp();
+    let kv = ai_array_join_kv();
+    format!(
+        "SELECT org_unit_id, metric_key, \
+                quantileExactIf(0.25)(v_period, isNotNull(v_period)) AS p25, \
+                quantileExactIf(0.5)(v_period, isNotNull(v_period)) AS median, \
+                quantileExactIf(0.75)(v_period, isNotNull(v_period)) AS p75, \
+                minIf(v_period, isNotNull(v_period)) AS range_min, \
+                maxIf(v_period, isNotNull(v_period)) AS range_max, \
+                countIf(isNotNull(v_period)) AS n \
+         FROM ( \
+             SELECT org_unit_id, kv.1 AS metric_key, kv.2 AS v_period \
+             FROM ({pp}) ppc \
+             {kv} \
+         ) inner_c \
+         GROUP BY org_unit_id, metric_key"
+    )
+}
+
 struct Seed {
     hex: &'static str,
     name: &'static str,
@@ -257,6 +375,18 @@ fn seeds() -> Vec<Seed> {
             name: "Dept Distribution — Git",
             description: "Per-(department, metric) quartile distribution for the Git bullet keys, from insight.git_bullet_rows. Filter by org_unit_id IN (...).",
             query: git_query(),
+        },
+        Seed {
+            hex: DEPT_KPI_DIST_HEX,
+            name: "Dept Distribution — Heatmap KPIs",
+            description: "Per-(department, metric) quartile distribution for the team heatmap KPI keys (tasks_closed, bugs_fixed, prs_merged, focus_time_pct, ai_loc_share_pct), from insight.ic_kpis. Filter by org_unit_id IN (...). NOTE: prs_merged inherits the pre-#627 PR name-fallback attribution gap.",
+            query: kpi_query(),
+        },
+        Seed {
+            hex: DEPT_DIST_AI_HEX,
+            name: "Dept Distribution — AI",
+            description: "Per-(department, metric) quartile distribution for the distributable AI bullet keys, from insight.ai_bullet_rows (active-counter flags and NULL placeholders excluded). Filter by org_unit_id IN (...).",
+            query: ai_query(),
         },
     ]
 }
@@ -286,6 +416,8 @@ impl MigrationTrait for Migration {
             DEPT_DIST_DELIVERY_HEX,
             DEPT_DIST_COLLAB_HEX,
             DEPT_DIST_GIT_HEX,
+            DEPT_KPI_DIST_HEX,
+            DEPT_DIST_AI_HEX,
         ] {
             db.execute_unprepared(&format!("DELETE FROM metrics WHERE id = UNHEX('{hex}')"))
                 .await?;
@@ -396,5 +528,67 @@ mod tests {
                 && q.contains("countIf(isNotNull(v_period)) AS n"),
             "git_query min/max/n must use the *If family gated on isNotNull, got:\n{q}"
         );
+    }
+
+    #[test]
+    fn kpi_query_shape() {
+        let q = kpi_query();
+        assert!(
+            q.contains("GROUP BY org_unit_id, metric_key"),
+            "kpi_query outer GROUP BY must be `org_unit_id, metric_key`, got:\n{q}"
+        );
+        assert!(
+            q.contains("org_unit_id, kv.1 AS metric_key"),
+            "kpi_query outer projection must keep org_unit_id and unpivot metric_key, got:\n{q}"
+        );
+        for key in [
+            "tasks_closed",
+            "bugs_fixed",
+            "prs_merged",
+            "focus_time_pct",
+            "ai_loc_share_pct",
+        ] {
+            assert!(
+                q.contains(&format!("('{key}', toFloat64({key}))")),
+                "kpi_query missing ARRAY JOIN entry for heatmap key {key}, got:\n{q}"
+            );
+        }
+        // Derives from the IC KPIs rollup (single ic_kpis read).
+        assert_eq!(
+            q.matches("FROM insight.ic_kpis").count(),
+            1,
+            "kpi_query must read ic_kpis once, got:\n{q}"
+        );
+    }
+
+    #[test]
+    fn ai_query_shape() {
+        let q = ai_query();
+        assert_common_shape(
+            &q,
+            "ai_query",
+            "insight.ai_bullet_rows",
+            "cursor_acceptance",
+        );
+        // Nullable AI ratios → *If(isNotNull) family (as in the Git distribution).
+        assert!(
+            q.contains("quantileExactIf(0.5)(v_period, isNotNull(v_period)) AS median")
+                && q.contains("countIf(isNotNull(v_period)) AS n"),
+            "ai_query quartile/count aggregators must skip NULLs via *If(isNotNull), got:\n{q}"
+        );
+        // Member-scale flags + NULL placeholders must NOT be unpivoted.
+        for key in [
+            "active_ai_members",
+            "cursor_active",
+            "cc_active",
+            "codex_active",
+            "chatgpt",
+            "claude_web",
+        ] {
+            assert!(
+                !q.contains(&format!("('{key}'")),
+                "ai_query non-distributable key {key} must be excluded from the ARRAY JOIN, got:\n{q}"
+            );
+        }
     }
 }

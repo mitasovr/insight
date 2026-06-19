@@ -1,15 +1,14 @@
-//! Add cohort distribution (p25/p75 + size `n`) to the Team / IC Bullet
-//! Task Delivery `query_ref`s. The `c`/`inner_c` cohort subquery gains
-//! `quantileExact(0.25)` / `quantileExact(0.75)` / `count`, surfaced as
-//! `p25`/`p75`/`n`. Team cohort stays company-wide; IC keeps the person's
-//! department (`org_unit_id`) cohort.
+//! Seed the Task Delivery bullets (team `…0003`, IC `…0011`): per-person
+//! wide-aggregate over `insight.task_delivery_bullet_rows` with cohort
+//! distribution (p25/p50/p75 + size `n`). IC compares against the person's
+//! DEPARTMENT cohort (`any(c.team_*)`, grouped by `org_unit_id`); the team
+//! bullet blends each roster member's department cohort
+//! (`avg(c.team_*)` over the roster, headcount-weighted).
 //!
-//! Team value scoping is done by the handler's `person_id IN (roster)`
-//! filter (the FE passes the identity-tree subtree it already shows), so
-//! the team query keeps the original `GROUP BY metric_key` shape — no
-//! supervisor join. Both bullet-row leaves still `GROUP BY person_id`, so
-//! `inject_date_filter_into_subqueries` injects the `metric_date` range before
-//! each GROUP BY exactly as before.
+//! Roster scoping is done by the handler's `person_id IN (roster)` filter, so
+//! the team query keeps `GROUP BY p.metric_key` — no supervisor join. Both
+//! leaves `GROUP BY person_id`, so `inject_date_filter_into_subqueries`
+//! injects the `metric_date` range before each GROUP BY.
 
 use sea_orm_migration::prelude::*;
 
@@ -100,12 +99,12 @@ fn team_query() -> String {
     format!(
         "SELECT p.metric_key AS metric_key, \
                 avg(p.v_period) AS value, \
-                any(c.company_median) AS median, \
-                any(c.company_min) AS range_min, \
-                any(c.company_max) AS range_max, \
-                any(c.company_p25) AS p25, \
-                any(c.company_p75) AS p75, \
-                any(c.company_n) AS n \
+                avg(c.team_median) AS median, \
+                avg(c.team_min) AS range_min, \
+                avg(c.team_max) AS range_max, \
+                avg(c.team_p25) AS p25, \
+                avg(c.team_p75) AS p75, \
+                toFloat64(count(p.v_period)) AS n \
          FROM ( \
              SELECT person_id, org_unit_id, \
                     kv.1 AS metric_key, kv.2 AS v_period \
@@ -113,20 +112,21 @@ fn team_query() -> String {
              {kv} \
          ) p \
          LEFT JOIN ( \
-             SELECT metric_key, \
-                    quantileExact(0.5)(v_period) AS company_median, \
-                    min(v_period) AS company_min, \
-                    {rmax} AS company_max, \
-                    quantileExact(0.25)(v_period) AS company_p25, \
-                    quantileExact(0.75)(v_period) AS company_p75, \
-                    count(v_period) AS company_n \
+             SELECT metric_key, org_unit_id, \
+                    quantileExact(0.5)(v_period) AS team_median, \
+                    min(v_period) AS team_min, \
+                    {rmax} AS team_max, \
+                    quantileExact(0.25)(v_period) AS team_p25, \
+                    quantileExact(0.75)(v_period) AS team_p75, \
+                    count(v_period) AS team_n \
              FROM ( \
-                 SELECT kv.1 AS metric_key, kv.2 AS v_period \
+                 SELECT person_id, org_unit_id, \
+                        kv.1 AS metric_key, kv.2 AS v_period \
                  FROM ({pp}) ppc \
                  {kv} \
              ) inner_c \
-             GROUP BY metric_key \
-         ) c ON c.metric_key = p.metric_key \
+             GROUP BY metric_key, org_unit_id \
+         ) c ON c.metric_key = p.metric_key AND c.org_unit_id = p.org_unit_id \
          GROUP BY p.metric_key"
     )
 }
@@ -391,49 +391,51 @@ mod tests {
     fn team_query_shape() {
         let q = team_query();
         assert_query_shape(&q, "team_query");
-        // Team-scope: company-wide cohort (not partitioned by org_unit_id).
+        // Team bullet blends each roster member's DEPARTMENT cohort:
+        // avg(c.team_*) joined on org_unit_id (headcount-weighted), not the
+        // old company-wide any(c.company_*).
         assert!(
-            q.contains("company_median") && q.contains("company_min") && q.contains("company_max"),
-            "team_query must expose company_* range, got:\n{q}"
+            q.contains("c.org_unit_id = p.org_unit_id"),
+            "team_query must join the department cohort on org_unit_id, got:\n{q}"
         );
-        assert!(
-            !q.contains("team_median"),
-            "team_query must NOT use team_median (that's the IC-side label)"
-        );
-        // Outer join key is metric_key only (no org_unit_id pairing).
-        assert!(
-            q.contains("ON c.metric_key = p.metric_key"),
-            "team_query JOIN must be on metric_key alone"
-        );
-
-        // Distribution: cohort P25/P75 + size, surfaced as p25/p75/n.
-        for col in ["company_p25", "company_p75", "company_n"] {
+        for col in ["median", "min", "max", "p25", "p75"] {
+            let blended = format!("avg(c.team_{col})");
             assert!(
-                q.contains(col),
-                "team_query must compute cohort column {col}, got:\n{q}"
+                q.contains(&blended),
+                "team_query cohort column must blend via `{blended}`, got:\n{q}"
             );
         }
-        for alias in ["AS p25", "AS p75", "AS n"] {
-            assert!(
-                q.contains(alias),
-                "team_query must surface distribution alias `{alias}`, got:\n{q}"
-            );
-        }
+        assert!(
+            !q.contains("any(c.team_") && !q.contains("company_median"),
+            "team_query must NOT use any(c.team_…) or company_* labels, got:\n{q}"
+        );
+        assert!(
+            q.contains("avg(p.v_period) AS value"),
+            "team_query value must stay avg(p.v_period), got:\n{q}"
+        );
+        assert!(
+            q.contains("toFloat64(count(p.v_period)) AS n"),
+            "team_query cohort size must be toFloat64(count(p.v_period)) AS n, got:\n{q}"
+        );
+        // Department cohort grouped per metric_key, org_unit_id; P95 tail kept.
+        assert!(
+            q.contains("GROUP BY metric_key, org_unit_id"),
+            "team_query cohort must group per metric_key, org_unit_id, got:\n{q}"
+        );
+        assert!(
+            q.contains("quantileExact(0.95)(v_period)"),
+            "team_query cohort team_max must keep the P95 expr, got:\n{q}"
+        );
 
-        // Roster scoping happens at the handler (`person_id IN (...)`), so
-        // the query stays company-wide + groups by metric_key only — no
-        // supervisor join, no supervisor_email column.
+        // Roster scoping happens at the handler (`person_id IN (...)`), so the
+        // outer groups by metric_key — no supervisor join.
         assert!(
             q.contains("GROUP BY p.metric_key"),
             "team_query outer GROUP BY must be metric_key, got:\n{q}"
         );
         assert!(
-            !q.contains("supervisor_email"),
-            "team_query must NOT reference supervisor_email (roster scope is at the handler)"
-        );
-        assert!(
-            !q.contains("insight.people"),
-            "team_query must NOT join insight.people"
+            !q.contains("supervisor_email") && !q.contains("insight.people"),
+            "team_query must NOT join insight.people / supervisor_email, got:\n{q}"
         );
     }
 
