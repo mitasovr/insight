@@ -32,7 +32,12 @@ mod m20260609_000001_ai_chatgpt_team_metrics;
 mod m20260609_000002_seed_chatgpt_team_metrics_catalog;
 mod m20260610_000001_fix_ai_label_drift;
 mod m20260611_000001_ai_bullet_dept_reconcile;
+mod m20260612_000001_support_metrics;
 mod m20260612_000001_team_git_bullet;
+mod m20260612_000002_seed_support_catalog;
+mod m20260612_000003_link_support_query_catalog;
+mod m20260618_000001_ai_claude_team_overage_metric;
+mod m20260618_000002_seed_claude_team_overage_catalog;
 
 #[cfg(test)]
 mod live_tests;
@@ -77,7 +82,12 @@ impl MigratorTrait for Migrator {
             Box::new(m20260609_000002_seed_chatgpt_team_metrics_catalog::Migration),
             Box::new(m20260610_000001_fix_ai_label_drift::Migration),
             Box::new(m20260611_000001_ai_bullet_dept_reconcile::Migration),
+            Box::new(m20260612_000001_support_metrics::Migration),
             Box::new(m20260612_000001_team_git_bullet::Migration),
+            Box::new(m20260612_000002_seed_support_catalog::Migration),
+            Box::new(m20260612_000003_link_support_query_catalog::Migration),
+            Box::new(m20260618_000001_ai_claude_team_overage_metric::Migration),
+            Box::new(m20260618_000002_seed_claude_team_overage_catalog::Migration),
         ]
     }
 }
