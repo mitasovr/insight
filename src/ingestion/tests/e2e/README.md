@@ -85,3 +85,19 @@ These ports avoid conflict with `dev-up.sh` (which uses 8123 / 3306) and the dbt
 
 - Auth in `analytics-api` requires no Bearer token, but its tenant middleware rejects requests without a non-nil tenant. The harness sends `X-Insight-Tenant-Id` with `e2e_lib.config.TEST_TENANT_ID` on every request and re-homes seeded metric definitions onto that tenant (`metric_seed.py`). The ClickHouse query path does not filter by tenant yet, so bronze CSV rows may use any tenant value.
 - Metric definitions are auto-seeded by the analytics-api binary's SeaORM migrations. Look up the metric UUID with `GET /v1/metrics` once the session is up, or add overrides in `seed/metrics.yaml`.
+
+## `cases` / `expect` (declarative YAML rig)
+
+Tests are `fixtures/**/*.test.yaml`; each `case` POSTs a batch to `/v1/metrics/queries` and checks an `expect` list of rules. A rule selects with `in` (batch result by `id`) + a Mongo-style `find`, then asserts via `equal` (subset of fields, exact / `null`) or `assert` (a CEL boolean). See the [yaml-rig FEATURE](../../../../docs/domain/bronze-to-api-e2e/specs/feature-yaml-rig/FEATURE.md) and the `/metric-e2e-test` skill.
+
+Variables available in an `assert` (CEL) expression — assembled in `e2e_lib/expect_engine.py::evaluate_case` (the `bindings` dict), converted to CEL in `_eval_cel`:
+
+| Binding | Value | Present when |
+|---------|-------|--------------|
+| `it` | the single row matched by `find` | only with `find` (else `null`) |
+| `items` | the selected result's `items` array | a result is selected (`in` or sole query) |
+| `result` | the selected batch result `{id, status, metric_id, items, page_info}` | a result is selected |
+| `results` | the full `results[]` of the batch | always |
+| `status` | the batch HTTP status code (int) | always |
+
+Numbers under `it`/`items`/`result`/`results` are float-coerced (CEL won't compare `int` to `double`) — compare metric values with float literals (`it.value > 39.5`); `status` and `size(...)` stay `int`. Use `equal` for exact / `null` comparisons.

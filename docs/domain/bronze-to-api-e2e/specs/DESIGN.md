@@ -343,7 +343,19 @@ Replaces `csv-asserter`. Dashboard metrics return many rows over a batch of quer
 
 ##### Responsibility scope
 
-Implements `cpt-bronze-to-api-e2e-algo-yaml-eval-expect`: selects a batch result by `id`; filters `result.items` by a Mongo-style selector to exactly one row; compares a subset of fields (`equal`, explicit `null`) or evaluates a CEL boolean (`assert`) with bindings `it`/`items`/`result`/`results`/`status`. Renders a precise failing-rule report.
+Implements `cpt-bronze-to-api-e2e-algo-yaml-eval-expect`: selects a batch result by `id`; filters `result.items` by a Mongo-style selector to exactly one row; compares a subset of fields (`equal`, explicit `null`) or evaluates a CEL boolean (`assert`). Renders a precise failing-rule report.
+
+The CEL `assert` bindings are assembled in `e2e_lib/expect_engine.py::evaluate_case` (the `bindings` dict) and converted to CEL in `_eval_cel`:
+
+| Binding | Value | Present when |
+|---|---|---|
+| `it` | the single row matched by `find` | only with `find` (else `null`) |
+| `items` | the selected result's `items` array | a result is selected |
+| `result` | the selected batch result `{id, status, metric_id, items, page_info}` | a result is selected |
+| `results` | the full `results[]` of the batch | always |
+| `status` | the batch HTTP status code (int) | always |
+
+Response numbers under `it`/`items`/`result`/`results` are float-coerced in `_eval_cel` (CEL won't compare `int` to `double`), so metric-value comparisons use float literals; `status` and `size(...)` stay `int`. Exact / `null` comparisons belong in `equal`.
 
 ##### Responsibility boundaries
 

@@ -133,6 +133,9 @@ def evaluate_case(case: dict, batch: dict, http_status: int) -> None:
                 if got != exp:
                     raise ExpectError(f"{where}: {field}: expected {exp!r}, got {got!r}")
         elif "assert" in rule:
+            # CANONICAL source of the CEL `assert` bindings (documented in the
+            # yaml-rig FEATURE, DESIGN expect-engine component, README, and the
+            # /metric-e2e-test skill). `it` is None unless this rule had a `find`.
             bindings = {
                 "it": it,
                 "items": items,

@@ -188,6 +188,23 @@ The CSV rig proved the path but was verbose (one CSV per table, full column rows
 5. [ ] - `p1` - **ELSE IF** `rule.assert` present → evaluate the CEL expression with bindings `it`, `items`, `result`, `results`, `status`; **IF** not `true` → Fail - `inst-eval-assert`
 6. [ ] - `p1` - **RETURN** Pass | Fail(field/expr, expected, actual) - `inst-eval-return`
 
+**CEL `assert` bindings** — the variables a `assert` expression may reference.
+Assembled in `e2e_lib/expect_engine.py::evaluate_case` (the `bindings` dict) and
+converted to CEL in `_eval_cel`:
+
+| Binding | Value | Present when |
+|---|---|---|
+| `it` | the single row matched by `find` | only with `find` (else `null`) |
+| `items` | the selected result's `items` array | a result is selected (`in` or sole query) |
+| `result` | the selected batch result `{id, status, metric_id, items, page_info}` | a result is selected |
+| `results` | the full `results[]` of the batch response | always |
+| `status` | the batch HTTP status code (int) | always |
+
+Numbers under `it`/`items`/`result`/`results` are coerced to float in `_eval_cel`
+(CEL is strictly typed and will not compare `int` to `double`), so compare metric
+values with float literals (`it.value > 39.5`); `status` stays an int and `size(...)`
+returns an int. Exact / `null` checks belong in `equal` (Python `==`), not `assert`.
+
 ## 4. States (CDSL)
 
 ### Test Lifecycle

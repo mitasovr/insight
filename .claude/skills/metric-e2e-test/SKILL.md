@@ -114,7 +114,25 @@ cases:
 - `in` — select the batch result by request `id` (omit when there is one query).
 - `find` — Mongo-style: `{field: value}` + `$gt/$gte/$lt/$lte/$ne/$in/$regex/$exists`.
 - `equal` — subset equality; use for exact ints / `null`.
-- `assert` — CEL boolean; use for inequalities / floats / counts. Bindings: `it` (matched row), `items`, `result`, `results`, `status`.
+- `assert` — CEL boolean; use for inequalities / floats / counts.
+
+### `assert` (CEL) bindings
+
+Assembled in `e2e_lib/expect_engine.py::evaluate_case` (the `bindings` dict),
+converted to CEL in `_eval_cel`:
+
+| Binding | Value | Present when |
+|---|---|---|
+| `it` | the single row matched by `find` | only with `find` (else `null` → `it.x` errors) |
+| `items` | the selected result's `items` array | a result is selected (`in` or sole query) |
+| `result` | the selected result `{id, status, metric_id, items, page_info}` | a result is selected |
+| `results` | the full `results[]` of the batch | always |
+| `status` | the batch HTTP status code (int) | always |
+
+Numbers under `it`/`items`/`result`/`results` are float-coerced (CEL won't compare
+`int` to `double`) → compare metric values with float literals (`it.value > 39.5`);
+`status` and `size(...)` are ints. For exact / `null`, use `equal` (Python `==`), not
+`assert`. CEL macros available: `size()`, `has()`, `.exists()`, `.all()`, `.map()`, `.filter()`.
 
 ## Scaffolding a new test
 
