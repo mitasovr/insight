@@ -3,7 +3,7 @@
 //! (paired gold view `insight.wiki_bullet_rows`).
 //!
 //! 4 `metric_keys`, all routed through `wiki_bullet_rows`, `source_tags`
-//! `["confluence"]` (Outline will share the same keys later):
+//! `["confluence", "outline"]` (both wiki sources feed the same keys):
 //!   `wiki_pages_created` / `wiki_edits` / `wiki_comments` — counters (higher better);
 //!   `wiki_active_authors` — 0/1 member-scale marker.
 //!
@@ -62,7 +62,7 @@ const SEEDS: &[SeedRow] = &[
         format: None,
         higher_is_better: true,
         is_member_scale: false,
-        source_tags: &["confluence"],
+        source_tags: &["confluence", "outline"],
         good: 5.0,
         warn: 1.0,
     },
@@ -75,7 +75,7 @@ const SEEDS: &[SeedRow] = &[
         format: None,
         higher_is_better: true,
         is_member_scale: false,
-        source_tags: &["confluence"],
+        source_tags: &["confluence", "outline"],
         good: 30.0,
         warn: 10.0,
     },
@@ -88,7 +88,7 @@ const SEEDS: &[SeedRow] = &[
         format: None,
         higher_is_better: true,
         is_member_scale: false,
-        source_tags: &["confluence"],
+        source_tags: &["confluence", "outline"],
         good: 10.0,
         warn: 2.0,
     },
@@ -101,7 +101,7 @@ const SEEDS: &[SeedRow] = &[
         format: None,
         higher_is_better: true,
         is_member_scale: true,
-        source_tags: &["confluence"],
+        source_tags: &["confluence", "outline"],
         good: 5.0,
         warn: 2.0,
     },
@@ -237,9 +237,9 @@ mod tests {
     }
 
     #[test]
-    fn tagged_confluence() {
+    fn tagged_confluence_and_outline() {
         for r in SEEDS {
-            assert_eq!(r.source_tags, &["confluence"]);
+            assert_eq!(r.source_tags, &["confluence", "outline"]);
         }
     }
 
