@@ -31,8 +31,13 @@ def load_schema(schemas_dir: Path, table: str) -> dict:
         path = schemas_dir / f"{table}.yaml"
         if not path.is_file():
             raise SchemaError(f"no schema for table '{table}': expected {path}")
-        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        schemas = doc.get("schemas", {})
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as e:
+            raise SchemaError(f"{path}: invalid YAML: {e}") from e
+        if not isinstance(doc, dict) or not isinstance(doc.get("schemas"), dict):
+            raise SchemaError(f"{path}: must have a top-level `schemas:` mapping")
+        schemas = doc["schemas"]
         if table not in schemas:
             raise SchemaError(f"{path}: missing `schemas.{table}` entry")
         _CACHE[key] = schemas[table]

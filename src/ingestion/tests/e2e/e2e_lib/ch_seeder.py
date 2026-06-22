@@ -124,7 +124,15 @@ class CHSeeder:
         if base in ("Bool", "Boolean"):
             if isinstance(value, bool):
                 return value
-            return str(value).lower() in ("true", "1")
+            norm = str(value).strip().lower()
+            if norm in ("true", "1"):
+                return True
+            if norm in ("false", "0"):
+                return False
+            raise SeederError(
+                f"column {col!r} ({ch_type}): non-boolean value {value!r} "
+                f"(use true/false)"
+            )
         # String / Decimal / Float / Int / Array / JSON: pass through. clickhouse-connect
         # accepts int→Decimal, str→JSON, list→Array, str→String as-is.
         return value

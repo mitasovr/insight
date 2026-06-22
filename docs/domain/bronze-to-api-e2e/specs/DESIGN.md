@@ -422,7 +422,7 @@ The framework consumes the existing analytics-api HTTP surface. No new endpoints
 
 | Method | Path | Description | Stability |
 |--------|------|-------------|-----------|
-| `POST` | `/v1/metrics/queries` | Batch metric query — `{queries:[{id, metric_id, $filter,...}]}` → `{results:[{id, status, items|error}]}`. Primary roundtrip for the YAML rig. | stable |
+| `POST` | `/v1/metrics/queries` | Batch metric query — `{queries:[{id, metric_id, $filter,...}]}` → `{results:[{id, status, items \| error}]}`. Primary roundtrip for the YAML rig. | stable |
 | `POST` | `/v1/metrics/{id}/query` | Execute a single metric query (OData `$filter`, `$top`, `$orderby`, `$select`) | stable |
 | `GET` | `/v1/metrics` | List metric definitions | stable |
 | `GET` | `/v1/metrics/{id}` | Get one metric definition | stable |

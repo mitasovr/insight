@@ -88,3 +88,16 @@ def test_mongo_operator_in_find():
 def test_in_optional_with_single_result():
     case = _case([{"find": {"metric_key": "m365_emails_sent"}, "equal": {"value": 40}}])
     evaluate_case(case, _batch(), 200)  # `in` omitted → sole result
+
+
+def test_unknown_find_operator_fails_fast():
+    case = _case([{"in": "collab", "find": {"value": {"$foo": 1}}, "equal": {"value": 40}}])
+    with pytest.raises(ExpectError, match="unknown find operator"):
+        evaluate_case(case, _batch(), 200)
+
+
+def test_exists_operator_against_null():
+    # slack_dm_ratio.value is null → $exists:true excludes it, $exists:false selects it
+    case = _case([{"in": "collab", "find": {"metric_key": "slack_dm_ratio", "value": {"$exists": False}},
+                   "equal": {"metric_key": "slack_dm_ratio"}}])
+    evaluate_case(case, _batch(), 200)

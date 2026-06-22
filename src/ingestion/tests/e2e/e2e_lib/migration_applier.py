@@ -68,6 +68,8 @@ def reapply_migrations(cfg: SessionConfig) -> int:
     repeat per fixture.
     """
     files = sorted(cfg.migrations_dir.glob("*.sql"))
+    if not files:
+        raise RuntimeError(f"no migration files found under {cfg.migrations_dir}")
     total = 0
     for f in files:
         total += _apply_file(cfg, f)

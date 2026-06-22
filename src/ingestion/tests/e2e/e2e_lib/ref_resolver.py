@@ -67,6 +67,8 @@ def _deep_merge(base: Any, override: Any) -> Any:
 
 def resolve(node: Any, ctx_file: Path, _stack: tuple[tuple[Path, str], ...] = ()) -> Any:
     """Resolve `$ref`s in `node`, written in `ctx_file`. Returns a plain value."""
+    if isinstance(node, list):
+        return [resolve(v, ctx_file, _stack) for v in node]
     if not isinstance(node, dict):
         return node
 

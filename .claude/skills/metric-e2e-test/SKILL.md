@@ -144,7 +144,7 @@ Numbers under `it`/`items`/`result`/`results` are float-coerced (CEL won't compa
 2. **Ensure a schema file per table.** If `schemas/<db>.<table>.yaml` is missing,
    generate it from the REAL table (do not invent columns):
    ```bash
-   export KUBECONFIG=/Users/roman/alemira/insight/access/dev-vhc/insight-k8s.kubeconfig
+   export KUBECONFIG=<path to your dev cluster kubeconfig>
    kubectl exec -n insight insight-clickhouse-0 -- clickhouse-client \
      --query "SELECT name, type FROM system.columns WHERE database='<db>' AND table='<table>' ORDER BY position FORMAT TSV"
    ```

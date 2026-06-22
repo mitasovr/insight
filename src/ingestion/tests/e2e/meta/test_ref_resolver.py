@@ -124,6 +124,20 @@ def test_cycle_raises(tmp_path: Path) -> None:
         resolve({"$ref": "#/templates/a"}, f)
 
 
+# 12b. $ref inside a list value is resolved element-wise
+def test_ref_inside_list(tmp_path: Path) -> None:
+    f = _write(tmp_path / "t.yaml", "templates:\n  base: {x: 1}\n")
+    out = resolve({"rows": [{"$ref": "#/templates/base"}, {"y": 2}]}, f)
+    assert out == {"rows": [{"x": 1}, {"y": 2}]}
+
+
+# 12c. a top-level list of refs resolves
+def test_top_level_list_of_refs(tmp_path: Path) -> None:
+    f = _write(tmp_path / "t.yaml", "templates:\n  base: {x: 1}\n")
+    out = resolve([{"$ref": "#/templates/base", "x": 9}, {"z": 3}], f)
+    assert out == [{"x": 9}, {"z": 3}]
+
+
 # 12. two-layer override (ref to a record that itself has $ref + siblings)
 def test_two_layer_override(tmp_path: Path) -> None:
     f = _write(

@@ -77,8 +77,11 @@ def load(path: Path, *, schemas_dir: Path | None = None) -> TestYaml:
     if "cases" not in doc:
         raise FixtureError(f"{path}: a test must define `cases`")
 
+    bronze_doc = doc.get("bronze") or {}
+    if not isinstance(bronze_doc, dict):
+        raise FixtureError(f"{path}: `bronze` must be a mapping of table → records")
     bronze: dict[str, list[dict]] = {}
-    for table, rows in (doc.get("bronze") or {}).items():
+    for table, rows in bronze_doc.items():
         if not isinstance(rows, list):
             raise FixtureError(f"{path}: bronze.{table} must be a list of records")
         try:
@@ -102,6 +105,9 @@ def load(path: Path, *, schemas_dir: Path | None = None) -> TestYaml:
     cases = doc["cases"]
     if not isinstance(cases, list) or not cases:
         raise FixtureError(f"{path}: `cases` must be a non-empty list")
+    for i, case in enumerate(cases):
+        if not isinstance(case, dict) or "request" not in case or "expect" not in case:
+            raise FixtureError(f"{path}: cases[{i}] must be a mapping with `request` and `expect`")
 
     return TestYaml(name=path.name[: -len(".test.yaml")], path=path, bronze=bronze, cases=cases)
 

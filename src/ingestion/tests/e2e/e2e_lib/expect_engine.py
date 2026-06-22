@@ -27,9 +27,16 @@ class ExpectError(AssertionError):
 # Mongo-style selector
 # ---------------------------------------------------------------------------
 
+_FIND_OPS = {"$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$regex", "$exists"}
+
+
 def _match_value(actual: Any, cond: Any) -> bool:
     if isinstance(cond, dict) and any(k.startswith("$") for k in cond):
         for op, operand in cond.items():
+            if op not in _FIND_OPS:
+                raise ExpectError(
+                    f"unknown find operator {op!r} (supported: {sorted(_FIND_OPS)})"
+                )
             if op == "$eq" and not (actual == operand):
                 return False
             elif op == "$ne" and not (actual != operand):

@@ -298,7 +298,7 @@ class AnalyticsApiProcess:
         body = request.get("body")
         with self.client() as c:
             kwargs: dict[str, Any] = {}
-            if method in ("POST", "PUT") and body is not None:
+            if body is not None:
                 kwargs["json"] = body
             LOG.info("→ %s %s", method, url)
             response = c.request(method, url, **kwargs)
