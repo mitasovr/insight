@@ -32,7 +32,7 @@ pytestmark = pytest.mark.fixture
 LOG = logging.getLogger("e2e.runner")
 
 
-def test_fixture(
+def test_e2e_metric_smoke(
     test_yaml: TestYaml,
     ch_seeder: CHSeeder,
     dbt_runner: DbtRunner,

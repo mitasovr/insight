@@ -14,6 +14,7 @@ that tenant.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -305,7 +306,7 @@ class AnalyticsApiProcess:
             LOG.info("← %d  (%d bytes)", response.status_code, len(response.content))
             try:
                 payload = response.json()
-            except Exception:  # noqa: BLE001
+            except json.JSONDecodeError:
                 payload = response.text
             return response.status_code, payload
 

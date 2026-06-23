@@ -142,7 +142,7 @@ A bronze row (or a template) is a field map that may carry a `$ref: "<file>#/<js
 
 - [ ] `p1` - **ID**: `cpt-bronze-to-api-e2e-principle-schema-is-truth`
 
-Per-table JSON schemas live in `specs/schemas/<table>.yaml` and are resolved by table name (the `bronze` key IS the table). After `$ref` resolution a row is padded with every missing schema column as `null` and validated; `additionalProperties:false` catches a misspelled column. Base templates carry the full column set (including the non-nullable `_airbyte_*` CDK columns, which transforms such as `insight.people`'s `argMax(..., _airbyte_extracted_at)` depend on).
+Per-table JSON schemas live in `specs/schemas/<db>.<table>.yaml` (the file stem is the full bronze table name, e.g. `bronze_m365.email_activity.yaml`) and are resolved by that name (the `bronze` key IS the table). After `$ref` resolution a row is padded with every missing schema column as `null` and validated; `additionalProperties:false` catches a misspelled column. Base templates carry the full column set (including the non-nullable `_airbyte_*` CDK columns, which transforms such as `insight.people`'s `argMax(..., _airbyte_extracted_at)` depend on).
 
 ### 2.2 Constraints
 
@@ -322,7 +322,7 @@ A resolved bronze row must be a complete, well-typed table row. Centralizing sch
 
 ##### Responsibility scope
 
-Loads `specs/schemas/<table>.yaml`; pads a resolved record with missing schema properties as `null`; validates against the JSON schema (`additionalProperties:false`). Implements the post-step of `cpt-bronze-to-api-e2e-algo-yaml-resolve-refs`.
+Loads `specs/schemas/<db>.<table>.yaml`; pads a resolved record with missing schema properties as `null`; validates against the JSON schema (`additionalProperties:false`). Implements the post-step of `cpt-bronze-to-api-e2e-algo-yaml-resolve-refs`.
 
 ##### Responsibility boundaries
 

@@ -188,7 +188,7 @@ ls specs/*.test.yaml                       # list existing tests
 ./e2e.sh test                              # run all tests (specs/ + meta/)
 ./e2e.sh test -k <name>                    # run one test by name
 ./e2e.sh test -k <name> -v                 # verbose (per-step log)
-./e2e.sh down                              # reset the stack; do this before a warm re-run
+./e2e.sh down                              # tear down the e2e compose stack + volumes (full reset)
 ```
 
-`<name>` is the file stem (e.g. `collab_emails_sent` for `specs/collab_emails_sent.test.yaml`). Run on a fresh ClickHouse; `./e2e.sh down` first if re-running on a warm stack.
+`<name>` is the file stem (e.g. `collab_emails_sent` for `specs/collab_emails_sent.test.yaml`). Warm re-runs are fine — the session resets the multi-reader collab silver/staging tables at start (conftest). `./e2e.sh down` is only the e2e compose teardown (it is not a deploy), for when you want a fully clean ClickHouse.

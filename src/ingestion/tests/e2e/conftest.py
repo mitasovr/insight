@@ -188,8 +188,8 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_generate_tests(metafunc):
-    """Generate one `test_fixture` invocation per discovered `*.test.yaml`."""
-    if "test_yaml" in metafunc.fixturenames and metafunc.function.__name__ == "test_fixture":
+    """Generate one `test_e2e_metric_smoke` invocation per discovered `*.test.yaml`."""
+    if "test_yaml" in metafunc.fixturenames and metafunc.function.__name__ == "test_e2e_metric_smoke":
         paths = discover_tests(_SPECS_ROOT)
         metafunc.parametrize(
             "test_path",

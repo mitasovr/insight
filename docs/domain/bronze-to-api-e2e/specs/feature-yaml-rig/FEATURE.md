@@ -45,7 +45,7 @@ Replace the folder-based CSV rig (`feature-csv-rig`: `bronze/*.csv` + `spec.yaml
 The readability goals are:
 
 - **Small surface, full data on demand.** A bronze row is written as a `$ref` to a reusable record template plus only the fields the test actually exercises. After resolution the row is padded to every column of the table schema, so the seeded record is complete without the author spelling out 29 columns.
-- **Reusable building blocks in separate files.** Per-table JSON schemas live in `specs/schemas/<table>.yaml`; record templates live in `specs/templates/*.yaml`. A test references them with the standard `$ref: "<file>#/<json-pointer>"` form.
+- **Reusable building blocks in separate files.** Per-table JSON schemas live in `specs/schemas/<db>.<table>.yaml` (e.g. `bronze_m365.email_activity.yaml`); record templates live in `specs/templates/*.yaml`. A test references them with the standard `$ref: "<file>#/<json-pointer>"` form.
 - **Assert what matters, not the whole body.** `expect` is a list of rules; each selects a row with an exact-equality `find` and either compares a subset of fields (`equal`) or evaluates a CEL boolean (`assert`). Anything richer than equality lives in the CEL `assert`, so there is no second selector language.
 
 This feature supersedes `feature-csv-rig` end to end: the `spec.yaml`/CSV loader, the `csv-asserter`, and the per-folder fixture layout are removed. The bronze→silver→gold→API path itself is unchanged — only the authoring format and the assertion engine change.
@@ -267,7 +267,7 @@ The resolver (`cpt-bronze-to-api-e2e-algo-yaml-resolve-refs`) **MUST** satisfy, 
 
 - [ ] `p1` - **ID**: `cpt-bronze-to-api-e2e-dod-yaml-schema-resolution`
 
-For each `bronze.<table>`, the system **MUST** resolve the schema by table name from `specs/schemas/<table>.yaml`, pad every resolved record with the schema's missing properties as `null`, and validate the record against the JSON schema. `additionalProperties:false` **MUST** reject an unknown field name. The `_airbyte_*` columns **MUST** be carried from the record (not auto-stamped), since transforms depend on them.
+For each `bronze.<table>`, the system **MUST** resolve the schema by table name from `specs/schemas/<db>.<table>.yaml`, pad every resolved record with the schema's missing properties as `null`, and validate the record against the JSON schema. `additionalProperties:false` **MUST** reject an unknown field name. The `_airbyte_*` columns **MUST** be carried from the record (not auto-stamped), since transforms depend on them.
 
 **Implements**: `cpt-bronze-to-api-e2e-algo-yaml-resolve-refs`
 
