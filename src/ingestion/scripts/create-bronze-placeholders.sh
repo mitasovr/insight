@@ -725,6 +725,20 @@ CREATE TABLE IF NOT EXISTS bronze_jira.jira_issue (
     _airbyte_generation_id UInt32        DEFAULT 0
 ) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY id;
 SQL
+else
+  # Reconcile a pre-existing placeholder to the current column contract — the
+  # snapshot/changelog staging models and jira-enrich read these columns, and a
+  # `CREATE TABLE IF NOT EXISTS` alone never adds them to an older table (e.g. a
+  # warm e2e ClickHouse from a prior run). Idempotent: ADD COLUMN IF NOT EXISTS.
+  echo "  Reconciling placeholder schema: bronze_jira.jira_issue"
+  run_ch <<'SQL'
+ALTER TABLE bronze_jira.jira_issue ADD COLUMN IF NOT EXISTS source_id String;
+ALTER TABLE bronze_jira.jira_issue ADD COLUMN IF NOT EXISTS jira_id String;
+ALTER TABLE bronze_jira.jira_issue ADD COLUMN IF NOT EXISTS created String;
+ALTER TABLE bronze_jira.jira_issue ADD COLUMN IF NOT EXISTS parent_id String;
+ALTER TABLE bronze_jira.jira_issue ADD COLUMN IF NOT EXISTS project_key String;
+ALTER TABLE bronze_jira.jira_issue ADD COLUMN IF NOT EXISTS reporter_id Nullable(String);
+SQL
 fi
 
 # bronze_jira.jira_user — identity anchor. jira__task_users (silver:class_task_users)

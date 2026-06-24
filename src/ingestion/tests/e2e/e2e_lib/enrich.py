@@ -44,7 +44,7 @@ _CONNECTORS_GLOB = "src/ingestion/connectors/**/descriptor.yaml"
 
 
 class EnrichError(RuntimeError):
-    pass
+    """A connector enrich step failed to build or run."""
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,7 @@ class EnrichStep:
 
     @property
     def binary_path(self) -> Path:
+        """Path to the compiled release binary produced by `cargo build`."""
         return self.crate_dir / "target" / "release" / self.binary_name
 
 
@@ -105,6 +106,7 @@ class EnrichRunner:
     """Session-scoped: discover enrich steps once, build each crate at most once."""
 
     def __init__(self, cfg: SessionConfig):
+        """Discover enrich steps from connector descriptors once per session."""
         self.cfg = cfg
         self.steps = discover_enrich_steps(cfg.repo_root)
         self._built: set[Path] = set()
@@ -137,6 +139,7 @@ class EnrichRunner:
         return sorted(found)
 
     def ensure_built(self, step: EnrichStep, *, timeout_s: float = 600.0) -> None:
+        """Cargo-build the step's enrich binary once per session (idempotent)."""
         if step.crate_dir in self._built:
             return
         cargo = _resolve_cargo()

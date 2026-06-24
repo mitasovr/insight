@@ -59,14 +59,13 @@ def test_e2e_metric_smoke(
     #     today, youtrack once it ships one). The enrich binary reads the connector's
     #     staging tables (built above) and writes back into `staging.*`.
     touched_schemas = {schema for schema, _ in test_yaml.touched_tables}
-    enrich_steps = enrich_runner.steps_for(touched_schemas)
-    enrich_ran = False
-    for step in enrich_steps:
+    ran_enrich_steps = []
+    for step in enrich_runner.steps_for(touched_schemas):
         source_ids = enrich_runner.discover_source_ids(step, test_yaml.touched_tables)
         if not source_ids:
             continue
         enrich_runner.run(step, source_ids)
-        enrich_ran = True
+        ran_enrich_steps.append(step)
 
     # 3c. Silver class models. Build exactly what the seeded data supports:
     #     derive_selectors gives the silver fed by seeded bronze (e.g. class_task_users,
@@ -74,9 +73,11 @@ def test_e2e_metric_smoke(
     #     EPHEMERAL staging view (e.g. class_task_field_history), which derive_selectors
     #     can't see. We build that precise set BY NAME rather than the connector's broad
     #     `tag:silver,tag:<c>+` so unseeded streams (class_task_sprints, the identity
-    #     chain, …) are not dragged in and fail on absent bronze.
+    #     chain, …) are not dragged in and fail on absent bronze. Only steps that
+    #     ACTUALLY ran (had a source_id) contribute their ephemeral targets — otherwise
+    #     we'd build silver that depends on enrich output that was never produced.
     silver_set = set(silver)
-    for step in enrich_steps:
+    for step in ran_enrich_steps:
         silver_set.update(dbt_runner.ephemeral_silver_targets(step.name))
     if silver_set:
         dbt_runner.build(" ".join(sorted(silver_set)), worker_ctx=worker_ctx)
@@ -85,7 +86,7 @@ def test_e2e_metric_smoke(
 
     # 4. Recreate gold views against the now-real silver schema (fixes the rig-only
     #    Code 80 nullability mismatch on date-filtered reads), then refresh MVs.
-    if staging or silver_set or enrich_ran:
+    if staging or silver_set or ran_enrich_steps:
         reapply_migrations(ch_seeder.cfg)
     refresh_intermediates(ch_seeder.cfg)
 
