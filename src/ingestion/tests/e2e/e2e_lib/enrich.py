@@ -1,4 +1,4 @@
-"""Connector *enrich* step: build + run a connector's compiled enrich binary.
+"""Connector *enrich* step: run a connector's pre-built enrich binary.
 
 Some connectors materialize part of their silver via a compiled "enrich" binary
 that reads the connector's staging tables and writes back into `staging.*`, which
@@ -6,18 +6,23 @@ dbt then unions into `silver.*` via `union_by_tag`. This is a first-class step i
 the connector pipeline, NOT a per-connector special case: any connector whose
 `descriptor.yaml` declares an `images.enrich` block participates.
 
-Prod order (per descriptor):
-    dbt(tag:<connector>)  ->  <connector>-enrich  ->  dbt(<descriptor.dbt_select>)
+Build vs run split (deliberate — see the e2e DESIGN notes):
+  * The BINARY IS BUILT BY THE CONNECTOR'S OWN `Dockerfile` (the same one that
+    ships the prod image), driven by `e2e.sh build`, which then extracts the
+    compiled binary into `tests/e2e/target/enrich/<binary>`. The rig does NOT
+    compile anything itself — there is no cargo logic here and no duplication of
+    the connector's build recipe. `e2e.sh` runs on the host (which has the Docker
+    daemon); the runner container cannot build images (no docker-in-docker).
+  * This module only DISCOVERS the steps (from descriptors) and RUNS the staged
+    binary inside the runner, between the staging and silver dbt builds — mirrors
+    prod `dbt(tag:<c>) -> <c>-enrich -> dbt(silver)`. Data-driven, so a new
+    connector (e.g. youtrack) participates as soon as it ships an `images.enrich`.
 
-The e2e rig mirrors that between its staging and silver dbt builds (see
-specs/test_fixtures.py). Discovery is data-driven from the descriptors, so when a
-new connector (e.g. youtrack) gains an `images.enrich` + `dbt_select`, the rig
-picks it up with no framework change.
+`python -m e2e_lib.enrich --plan` prints the build plan (one TSV row per enrich
+step) that `e2e.sh build` consumes to build+stage the binaries — keeping the
+descriptor the single source of truth for both build and run.
 
 The enrich binary contract (shared by the family — verified against jira-enrich):
-  - built with `cargo build --release --features io` from `<descriptor>/<context>`
-    (the `images.enrich.context`, conventionally `./enrich`); binary name = the
-    crate's `[package].name`.
   - CLI/env: `--insight-source-id` (INSIGHT_SOURCE_ID), `--clickhouse-host`
     (CLICKHOUSE_HOST), `--clickhouse-port` (CLICKHOUSE_PORT, HTTP), `--clickhouse-user`
     (CLICKHOUSE_USER); password via CLICKHOUSE_PASSWORD env. Reads+writes `staging.*`.
@@ -35,16 +40,18 @@ from pathlib import Path
 import yaml
 
 from e2e_lib import clickhouse as ch
-from e2e_lib.analytics_api import _resolve_cargo  # shared cargo locator
 from e2e_lib.config import SessionConfig
 
 LOG = logging.getLogger("e2e.enrich")
 
 _CONNECTORS_GLOB = "src/ingestion/connectors/**/descriptor.yaml"
+# Where `e2e.sh build` stages the extracted enrich binaries (under the dbt target
+# tree, which is gitignored and mounted into the runner at /workspace).
+_STAGE_DIR_REL = "src/ingestion/tests/e2e/target/enrich"
 
 
 class EnrichError(RuntimeError):
-    """A connector enrich step failed to build or run."""
+    """A connector enrich step failed to run, or its binary was not staged."""
 
 
 @dataclass(frozen=True)
@@ -53,18 +60,20 @@ class EnrichStep:
 
     name: str  # connector name, e.g. "jira" — also its dbt tag
     namespace: str  # bronze schema, e.g. "bronze_jira"
-    crate_dir: Path  # cargo crate dir (descriptor dir / images.enrich.context)
-    binary_name: str  # crate [package].name, e.g. "jira-enrich"
-    dbt_select: str  # descriptor.dbt_select — silver routing (e.g. "tag:silver,tag:jira+")
+    dockerfile: Path  # the connector's OWN Dockerfile (built by e2e.sh, not the rig)
+    context: Path  # docker build context for that Dockerfile
+    binary_name: str  # crate [package].name, e.g. "jira-enrich" — the staged filename
+    stage_dir: Path  # tests/e2e/target/enrich (where e2e.sh drops the binary)
 
     @property
     def binary_path(self) -> Path:
-        """Path to the compiled release binary produced by `cargo build`."""
-        return self.crate_dir / "target" / "release" / self.binary_name
+        """Path to the binary staged by `e2e.sh build` (extracted from the image)."""
+        return self.stage_dir / self.binary_name
 
 
 def discover_enrich_steps(repo_root: Path) -> list[EnrichStep]:
     """Every connector descriptor that declares `images.enrich`."""
+    stage_dir = repo_root / _STAGE_DIR_REL
     steps: list[EnrichStep] = []
     for desc_path in sorted(repo_root.glob(_CONNECTORS_GLOB)):
         try:
@@ -79,11 +88,16 @@ def discover_enrich_steps(repo_root: Path) -> list[EnrichStep]:
         if not namespace:
             LOG.warning("descriptor %s has images.enrich but no connection.namespace; skipping", desc_path)
             continue
-        context = enrich.get("context", "./enrich")
-        crate_dir = (desc_path.parent / context).resolve()
-        cargo_toml = crate_dir / "Cargo.toml"
+        dockerfile_rel = enrich.get("dockerfile")
+        context_rel = enrich.get("context", "./enrich")
+        if not dockerfile_rel:
+            LOG.warning("descriptor %s images.enrich missing `dockerfile`; skipping", desc_path)
+            continue
+        dockerfile = (desc_path.parent / dockerfile_rel).resolve()
+        context = (desc_path.parent / context_rel).resolve()
+        cargo_toml = context / "Cargo.toml"
         if not cargo_toml.is_file():
-            LOG.warning("enrich crate not found at %s (descriptor %s); skipping", cargo_toml, desc_path)
+            LOG.warning("enrich crate Cargo.toml not found at %s (descriptor %s); skipping", cargo_toml, desc_path)
             continue
         try:
             binary_name = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))["package"]["name"]
@@ -94,22 +108,22 @@ def discover_enrich_steps(repo_root: Path) -> list[EnrichStep]:
             EnrichStep(
                 name=doc.get("name") or namespace.removeprefix("bronze_"),
                 namespace=namespace,
-                crate_dir=crate_dir,
+                dockerfile=dockerfile,
+                context=context,
                 binary_name=binary_name,
-                dbt_select=doc.get("dbt_select") or "",
+                stage_dir=stage_dir,
             )
         )
     return steps
 
 
 class EnrichRunner:
-    """Session-scoped: discover enrich steps once, build each crate at most once."""
+    """Session-scoped: discover enrich steps once; run their pre-staged binaries."""
 
     def __init__(self, cfg: SessionConfig):
         """Discover enrich steps from connector descriptors once per session."""
         self.cfg = cfg
         self.steps = discover_enrich_steps(cfg.repo_root)
-        self._built: set[Path] = set()
 
     def steps_for(self, schemas: set[str]) -> list[EnrichStep]:
         """Enrich steps whose bronze namespace is among the seeded schemas."""
@@ -138,35 +152,12 @@ class EnrichRunner:
             found.update(str(r[0]) for r in rows)
         return sorted(found)
 
-    def ensure_built(self, step: EnrichStep, *, timeout_s: float = 600.0) -> None:
-        """Cargo-build the step's enrich binary once per session (idempotent)."""
-        if step.crate_dir in self._built:
-            return
-        cargo = _resolve_cargo()
-        if cargo is None:
-            raise EnrichError(
-                "cargo not found on PATH or standard rustup locations — cannot build "
-                f"enrich binary for connector {step.name!r}."
-            )
-        LOG.info("cargo build --release --features io (%s) at %s", step.binary_name, step.crate_dir)
-        result = subprocess.run(
-            [cargo, "build", "--release", "--features", "io", "--manifest-path", str(step.crate_dir / "Cargo.toml")],
-            cwd=str(step.crate_dir),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout_s,
-        )
-        if result.returncode != 0:
-            raise EnrichError(
-                f"cargo build failed for {step.name} enrich (exit={result.returncode}):\n{result.stderr[-2000:]}"
-            )
-        if not step.binary_path.exists():
-            raise EnrichError(f"enrich binary not at expected path: {step.binary_path}")
-        self._built.add(step.crate_dir)
-
     def run(self, step: EnrichStep, source_ids: list[str], *, timeout_s: float = 180.0) -> None:
-        """Build (once) then run the enrich binary for each connector instance."""
+        """Run the pre-staged enrich binary once per connector instance.
+
+        The binary must have been built+staged by `e2e.sh build` (it compiles the
+        connector's own Dockerfile and extracts the binary into `target/enrich/`).
+        """
         if not source_ids:
             LOG.warning(
                 "enrich %s: no source_id found in seeded %s tables; skipping (nothing to enrich)",
@@ -174,7 +165,11 @@ class EnrichRunner:
                 step.namespace,
             )
             return
-        self.ensure_built(step)
+        if not step.binary_path.exists():
+            raise EnrichError(
+                f"{step.name} enrich binary not staged at {step.binary_path} — run `./e2e.sh build` "
+                f"first (it builds {step.dockerfile} and extracts the binary)."
+            )
         for sid in source_ids:
             env = os.environ.copy()
             env.update(
@@ -207,3 +202,32 @@ class EnrichRunner:
                     f"{step.name} enrich failed for source_id={sid} (exit={result.returncode}):\n"
                     f"stdout tail:\n{result.stdout[-1500:]}\nstderr tail:\n{result.stderr[-1500:]}"
                 )
+
+
+def _print_build_plan(repo_root: Path) -> None:
+    """Emit one TSV row per enrich step for `e2e.sh build` (paths repo-root-relative).
+
+    Columns: name <TAB> dockerfile <TAB> context <TAB> binary_name. `e2e.sh` builds
+    each `dockerfile` (the connector's own), then extracts the binary named
+    `binary_name` into `target/enrich/`. Keeps the descriptor the single source of
+    truth for both build and run sides.
+    """
+    for s in discover_enrich_steps(repo_root):
+        dockerfile = s.dockerfile.relative_to(repo_root)
+        context = s.context.relative_to(repo_root)
+        print(f"{s.name}\t{dockerfile}\t{context}\t{s.binary_name}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="enrich-step helper")
+    parser.add_argument("--plan", action="store_true", help="print the build plan as TSV and exit")
+    parser.add_argument(
+        "--repo-root",
+        default=os.environ.get("INSIGHT_REPO_ROOT", "/workspace"),
+        help="repo root (default: $INSIGHT_REPO_ROOT or /workspace)",
+    )
+    args = parser.parse_args()
+    if args.plan:
+        _print_build_plan(Path(args.repo_root))
