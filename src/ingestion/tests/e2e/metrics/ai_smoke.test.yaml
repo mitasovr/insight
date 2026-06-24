@@ -12,7 +12,7 @@ description: >
 
 # alice/bob/carol all live in Engineering (people.yaml) → one team (org_unit), so
 # the IC bullet's median/range are computed over the three. Each person carries
-# all three Cursor counters in one row so a single seed exercises every metric.
+# all Cursor counters in one row so a single seed exercises every metric.
 bronze:
   bronze_bamboohr.employees:
     - $ref: templates/people.yaml#/templates/alice
@@ -22,12 +22,14 @@ bronze:
   bronze_cursor.cursor_daily_usage:
     # date = 1767571200000 ms = 2026-01-05T00:00:00Z → day 2026-01-05.
     # acceptedLinesAdded → cursor_lines · totalTabsAccepted → cursor_completions
-    # · agentRequests → cursor_agents.
+    # · agentRequests → cursor_agents · totalTabsShown → cursor_offered
+    # (denominator for cursor_acceptance = 100*completions/offered).
     - $ref: templates/cursor_usage.yaml#/templates/alice
       unique_key: cursor-alice-20260105
       date: 1767571200000
       acceptedLinesAdded: 40
       totalTabsAccepted: 50
+      totalTabsShown: 80
       agentRequests: 30
 
     - $ref: templates/cursor_usage.yaml#/templates/alice   # re-sync duplicate → sums must NOT double
@@ -35,6 +37,7 @@ bronze:
       date: 1767571200000
       acceptedLinesAdded: 40
       totalTabsAccepted: 50
+      totalTabsShown: 80
       agentRequests: 30
 
     - $ref: templates/cursor_usage.yaml#/templates/bob
@@ -42,6 +45,7 @@ bronze:
       date: 1767571200000
       acceptedLinesAdded: 20
       totalTabsAccepted: 20
+      totalTabsShown: 80
       agentRequests: 10
 
     - $ref: templates/cursor_usage.yaml#/templates/carol
@@ -49,15 +53,17 @@ bronze:
       date: 1767571200000
       acceptedLinesAdded: 10
       totalTabsAccepted: 10
+      totalTabsShown: 25
       agentRequests: 5
 
-# IC Bullet AI (…0013): value = the requested person's own sum (from $filter);
+# IC Bullet AI (…0013): value = the requested person's own value (from $filter);
 # median/range = over their team (org_unit). One request returns every metric_key;
-# each rule asserts one. Numbers picked so median ≠ mean and value=alice; the
-# duplicate must dedup (else alice's sums would double).
-#   cursor_lines:       [alice 40, bob 20, carol 10] → value 40, median 20, range 10–40
-#   cursor_completions: [alice 50, bob 20, carol 10] → value 50, median 20, range 10–50
-#   cursor_agents:      [alice 30, bob 10, carol 5]  → value 30, median 10, range  5–30
+# each rule asserts one. Duplicate must dedup (else alice's sums would double).
+#   cursor_lines:       Σ accepted lines   [alice 40, bob 20, carol 10] → value 40, median 20, range 10–40
+#   cursor_completions: Σ tabs accepted    [alice 50, bob 20, carol 10] → value 50, median 20, range 10–50
+#   cursor_agents:      Σ agent sessions   [alice 30, bob 10, carol 5]  → value 30, median 10, range  5–30
+#   cursor_active:      1 per active member; range_max = team headcount → value 1, median 0, range 0–3
+#   cursor_acceptance:  round(100*accepted/shown,1) [alice 50/80=62.5, bob 20/80=25, carol 10/25=40] → value 62.5
 cases:
   - name: cursor metrics — IC bullet (alice value vs team median, dedup holds)
     request:
@@ -83,3 +89,9 @@ cases:
       - in: ai
         find: { metric_key: cursor_agents }
         equal: { value: 30, median: 10, range_min: 5, range_max: 30 }
+      - in: ai
+        find: { metric_key: cursor_active }
+        equal: { value: 1, median: 0, range_min: 0, range_max: 3 }
+      - in: ai
+        find: { metric_key: cursor_acceptance }
+        equal: { value: 62.5 }
