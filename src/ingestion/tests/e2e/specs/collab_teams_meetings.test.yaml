@@ -1,0 +1,51 @@
+spec_version: 1
+description: >
+  Per-metric E2E check for teams_meetings (#1413). Seeds
+  bronze_m365.teams_activity meetingsAttendedCount for 3 people in one team and
+  asserts the IC Bullet Collaboration metric (…0012). teams_meetings =
+  sumIf(meetings_attended, data_source = insight_m365) — the m365-only slice of
+  meetings_count (equal here, no zoom). value = member, median/range = team.
+
+bronze:
+  bronze_bamboohr.employees:
+    - $ref: templates/people.yaml#/templates/alice
+    - $ref: templates/people.yaml#/templates/bob
+    - $ref: templates/people.yaml#/templates/carol
+
+  bronze_m365.teams_activity:
+    - $ref: templates/m365_teams.yaml#/templates/alice_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-tm-20260105
+      meetingsAttendedCount: 4
+    - $ref: templates/m365_teams.yaml#/templates/alice_teams  # verbatim duplicate -> must dedup, not double
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-tm-20260105
+      meetingsAttendedCount: 4
+    - $ref: templates/m365_teams.yaml#/templates/bob_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-bob-tm-20260105
+      meetingsAttendedCount: 2
+    - $ref: templates/m365_teams.yaml#/templates/carol_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-carol-tm-20260105
+      meetingsAttendedCount: 1
+
+cases:
+  # team teams_meetings = [alice 4, bob 2, carol 1]
+  #   value (alice) = 4 ; median[1,2,4] = 2 ; range = [1,4]
+  - name: teams_meetings — IC bullet (alice value vs team median/range)
+    request:
+      url: /v1/metrics/queries
+      method: POST
+      body:
+        queries:
+          - id: collaboration
+            metric_id: 00000000-0000-0000-0001-000000000012
+            $filter: "person_id eq 'alice@example.com' and metric_date ge '2026-01-01' and metric_date le '2026-01-31'"
+    expect:
+      - assert: "status == 200"
+      - in: collaboration
+        assert: "result.status == 'ok'"
+      - in: collaboration
+        find: { metric_key: teams_meetings }
+        equal: { value: 4, median: 2, range_min: 1, range_max: 4 }

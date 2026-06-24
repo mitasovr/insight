@@ -1,0 +1,58 @@
+spec_version: 1
+description: >
+  Per-metric E2E check for m365_files_engaged (#1413). Seeds
+  bronze_m365.onedrive_activity + bronze_m365.sharepoint_activity for 3 people in
+  one team and asserts the IC Bullet Collaboration metric (…0012).
+  m365_files_engaged = Σ viewedOrEditedFileCount across BOTH products and the
+  period. alice has both products (30 + 20 = 50) to pin the cross-product sum.
+  value = member, median/range = team.
+
+bronze:
+  bronze_bamboohr.employees:
+    - $ref: templates/people.yaml#/templates/alice
+    - $ref: templates/people.yaml#/templates/bob
+    - $ref: templates/people.yaml#/templates/carol
+
+  bronze_m365.onedrive_activity:
+    - $ref: templates/m365_onedrive.yaml#/templates/alice_onedrive
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-od-eng-20260105
+      viewedOrEditedFileCount: 30
+    - $ref: templates/m365_onedrive.yaml#/templates/alice_onedrive  # verbatim duplicate -> must dedup, not double
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-od-eng-20260105
+      viewedOrEditedFileCount: 30
+    - $ref: templates/m365_onedrive.yaml#/templates/bob_onedrive
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-bob-od-eng-20260105
+      viewedOrEditedFileCount: 15
+
+  bronze_m365.sharepoint_activity:
+    - $ref: templates/m365_sharepoint.yaml#/templates/alice_sharepoint
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-sp-eng-20260105
+      viewedOrEditedFileCount: 20
+    - $ref: templates/m365_sharepoint.yaml#/templates/carol_sharepoint
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-carol-sp-eng-20260105
+      viewedOrEditedFileCount: 5
+
+cases:
+  # team m365_files_engaged = [alice 30+20=50, bob 15, carol 5]
+  #   value (alice) = 50 ; median[5,15,50] = 15 ; range = [5,50]
+  - name: m365_files_engaged — IC bullet (alice value vs team median/range)
+    request:
+      url: /v1/metrics/queries
+      method: POST
+      body:
+        queries:
+          - id: collaboration
+            metric_id: 00000000-0000-0000-0001-000000000012
+            $filter: "person_id eq 'alice@example.com' and metric_date ge '2026-01-01' and metric_date le '2026-01-31'"
+    expect:
+      - assert: "status == 200"
+      - in: collaboration
+        assert: "result.status == 'ok'"
+      - in: collaboration
+        find: { metric_key: m365_files_engaged }
+        equal: { value: 50, median: 15, range_min: 5, range_max: 50 }

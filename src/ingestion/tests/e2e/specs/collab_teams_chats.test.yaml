@@ -1,0 +1,54 @@
+spec_version: 1
+description: >
+  Per-metric E2E check for m365_teams_chats (#1413). Seeds
+  bronze_m365.teams_activity for 3 people in one team and asserts the IC Bullet
+  Collaboration metric (…0012). total_chat_messages = privateChatMessageCount +
+  teamChatMessageCount, summed over the period. value = member, median/range = team.
+
+bronze:
+  bronze_bamboohr.employees:
+    - $ref: templates/people.yaml#/templates/alice
+    - $ref: templates/people.yaml#/templates/bob
+    - $ref: templates/people.yaml#/templates/carol
+
+  bronze_m365.teams_activity:
+    - $ref: templates/m365_teams.yaml#/templates/alice_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-chat-20260105
+      privateChatMessageCount: 15
+      teamChatMessageCount: 25
+    - $ref: templates/m365_teams.yaml#/templates/alice_teams  # verbatim duplicate -> must dedup, not double
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-chat-20260105
+      privateChatMessageCount: 15
+      teamChatMessageCount: 25
+    - $ref: templates/m365_teams.yaml#/templates/bob_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-bob-chat-20260105
+      privateChatMessageCount: 10
+      teamChatMessageCount: 10
+    - $ref: templates/m365_teams.yaml#/templates/carol_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-carol-chat-20260105
+      privateChatMessageCount: 5
+      teamChatMessageCount: 5
+
+cases:
+  # team m365_teams_chats = [alice 40, bob 20, carol 10]
+  #   value (alice) = 40 ; median[10,20,40] = 20 ; range = [10,40]
+  - name: m365_teams_chats — IC bullet (alice value vs team median/range)
+    request:
+      url: /v1/metrics/queries
+      method: POST
+      body:
+        queries:
+          - id: collaboration
+            metric_id: 00000000-0000-0000-0001-000000000012
+            $filter: "person_id eq 'alice@example.com' and metric_date ge '2026-01-01' and metric_date le '2026-01-31'"
+    expect:
+      - assert: "status == 200"
+      - in: collaboration
+        assert: "result.status == 'ok'"
+      - in: collaboration
+        find: { metric_key: m365_teams_chats }
+        equal: { value: 40, median: 20, range_min: 10, range_max: 40 }

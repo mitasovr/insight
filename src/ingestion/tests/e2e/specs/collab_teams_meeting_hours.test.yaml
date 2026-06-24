@@ -1,0 +1,60 @@
+spec_version: 1
+description: >
+  Per-metric E2E check for teams_meeting_hours (#1413). Seeds
+  bronze_m365.teams_activity durations for 3 people in one team and asserts the
+  IC Bullet Collaboration metric (…0012). teams_meeting_hours =
+  sumIf(greatest(audio,video,screenShare)/3600, data_source = insight_m365) —
+  the m365-only slice of meeting_hours (equal to it here, no zoom). value =
+  member, median/range = team.
+
+bronze:
+  bronze_bamboohr.employees:
+    - $ref: templates/people.yaml#/templates/alice
+    - $ref: templates/people.yaml#/templates/bob
+    - $ref: templates/people.yaml#/templates/carol
+
+  bronze_m365.teams_activity:
+    - $ref: templates/m365_teams.yaml#/templates/alice_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-tmh-20260105
+      audioDuration: PT2H
+      videoDuration: PT1H
+      screenShareDuration: PT0S
+    - $ref: templates/m365_teams.yaml#/templates/alice_teams  # verbatim duplicate -> must dedup, not double
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-tmh-20260105
+      audioDuration: PT2H
+      videoDuration: PT1H
+      screenShareDuration: PT0S
+    - $ref: templates/m365_teams.yaml#/templates/bob_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-bob-tmh-20260105
+      audioDuration: PT1H
+      videoDuration: PT0S
+      screenShareDuration: PT0S
+    - $ref: templates/m365_teams.yaml#/templates/carol_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-carol-tmh-20260105
+      audioDuration: PT30M
+      videoDuration: PT0S
+      screenShareDuration: PT0S
+
+cases:
+  # alice 2.0h, bob 1.0h, carol 0.5h (all m365)
+  #   value (alice) = 2.0 ; median[0.5,1.0,2.0] = 1.0 ; range = [0.5,2.0]
+  - name: teams_meeting_hours — IC bullet (alice value vs team median/range)
+    request:
+      url: /v1/metrics/queries
+      method: POST
+      body:
+        queries:
+          - id: collaboration
+            metric_id: 00000000-0000-0000-0001-000000000012
+            $filter: "person_id eq 'alice@example.com' and metric_date ge '2026-01-01' and metric_date le '2026-01-31'"
+    expect:
+      - assert: "status == 200"
+      - in: collaboration
+        assert: "result.status == 'ok'"
+      - in: collaboration
+        find: { metric_key: teams_meeting_hours }
+        equal: { value: 2.0, median: 1.0, range_min: 0.5, range_max: 2.0 }

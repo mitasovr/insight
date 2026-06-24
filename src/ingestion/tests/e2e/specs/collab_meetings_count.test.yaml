@@ -1,0 +1,50 @@
+spec_version: 1
+description: >
+  Per-metric E2E check for meetings_count (#1413). Seeds
+  bronze_m365.teams_activity meetingsAttendedCount for 3 people in one team and
+  asserts the IC Bullet Collaboration metric (…0012). Period Σ of meetings
+  attended (cross-source; only m365 here). value = member, median/range = team.
+
+bronze:
+  bronze_bamboohr.employees:
+    - $ref: templates/people.yaml#/templates/alice
+    - $ref: templates/people.yaml#/templates/bob
+    - $ref: templates/people.yaml#/templates/carol
+
+  bronze_m365.teams_activity:
+    - $ref: templates/m365_teams.yaml#/templates/alice_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-mcount-20260105
+      meetingsAttendedCount: 4
+    - $ref: templates/m365_teams.yaml#/templates/alice_teams  # verbatim duplicate -> must dedup, not double
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-alice-mcount-20260105
+      meetingsAttendedCount: 4
+    - $ref: templates/m365_teams.yaml#/templates/bob_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-bob-mcount-20260105
+      meetingsAttendedCount: 2
+    - $ref: templates/m365_teams.yaml#/templates/carol_teams
+      reportRefreshDate: "2026-01-05"
+      unique_key: m365-carol-mcount-20260105
+      meetingsAttendedCount: 1
+
+cases:
+  # team meetings_count = [alice 4, bob 2, carol 1]
+  #   value (alice) = 4 ; median[1,2,4] = 2 ; range = [1,4]
+  - name: meetings_count — IC bullet (alice value vs team median/range)
+    request:
+      url: /v1/metrics/queries
+      method: POST
+      body:
+        queries:
+          - id: collaboration
+            metric_id: 00000000-0000-0000-0001-000000000012
+            $filter: "person_id eq 'alice@example.com' and metric_date ge '2026-01-01' and metric_date le '2026-01-31'"
+    expect:
+      - assert: "status == 200"
+      - in: collaboration
+        assert: "result.status == 'ok'"
+      - in: collaboration
+        find: { metric_key: meetings_count }
+        equal: { value: 4, median: 2, range_min: 1, range_max: 4 }
