@@ -210,15 +210,17 @@ connector that isn't there yet:
 
 ## Gotchas (rig operations + cross-test impact)
 
-- **Stale binary / your migration didn't run.** `./e2e.sh` runs analytics-api
-  from the `cargo-target` Docker VOLUME. A volume left over from a prior session
-  does NOT always rebuild on new Rust files (cargo mtime quirk over the bind
-  mount), so the binary silently lacks your new SeaORM migrations — symptoms:
-  `query_ref`/catalog changes don't take effect, a `find` matches 0 rows, a
-  `size(items)` is off by your new key. Confirm by querying `seaql_migrations`
-  (below); fix with a full volume wipe + cold rebuild:
-  `INSIGHT_REPO_ROOT="$(cd ../../../.. && pwd)" docker compose -f compose/docker-compose.yml -f compose/docker-compose.runner.yml down -v`,
-  then re-run (cold build ~7 min).
+- **Stale binary / your migration didn't run.** Historically the biggest trap:
+  `./e2e.sh` builds analytics-api into the `cargo-target` Docker volume, and on
+  Docker Desktop (macOS) the mtimes cargo reads through the bind mount don't
+  reliably advance, so cargo relinked a stale object and the binary silently
+  lacked new SeaORM migrations (symptoms: `query_ref`/catalog changes have no
+  effect, a `find` matches 0 rows, `size(items)` off by your new key). FIXED in
+  `e2e_lib/analytics_api.py::build` — it now `touch`es the analytics-api crate
+  sources before `cargo build`, forcing a recompile every run (~1-2 min, only
+  that crate). So a plain `./e2e.sh test` picks up new migrations now; you should
+  NOT need `down -v` for this. If you still suspect a stale binary, confirm by
+  querying `seaql_migrations` (below) — your migration version must be present.
 - **`1045 Access denied for user 'insight'` at API startup.** Stale
   `compose/.env` creds vs a persisted MariaDB volume. Same `down -v` fixes it.
 - **Inspect the live DB after a run.** CH + MariaDB stay UP after `./e2e.sh test`
