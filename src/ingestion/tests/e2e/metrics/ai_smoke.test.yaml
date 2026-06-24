@@ -1,0 +1,85 @@
+spec_version: 1
+description: >
+  AI Adoption smoke (#1440). One clean bronze seed → assert every AI-adoption
+  metric served from gold insight.ai_bullet_rows. One fixture per shared gold
+  view: all AI connectors (cursor, claude_team, chatgpt_team) feed the single
+  silver class_ai_dev_usage, so they must be seeded + asserted together (a
+  per-connector or per-metric split would collide on the shared silver/staging
+  models within a session).
+
+  Currently covers the Cursor metrics; claude_team / chatgpt_team metrics will be
+  added to the same seed.
+
+# alice/bob/carol all live in Engineering (people.yaml) → one team (org_unit), so
+# the IC bullet's median/range are computed over the three. Each person carries
+# all three Cursor counters in one row so a single seed exercises every metric.
+bronze:
+  bronze_bamboohr.employees:
+    - $ref: templates/people.yaml#/templates/alice
+    - $ref: templates/people.yaml#/templates/bob
+    - $ref: templates/people.yaml#/templates/carol
+
+  bronze_cursor.cursor_daily_usage:
+    # date = 1767571200000 ms = 2026-01-05T00:00:00Z → day 2026-01-05.
+    # acceptedLinesAdded → cursor_lines · totalTabsAccepted → cursor_completions
+    # · agentRequests → cursor_agents.
+    - $ref: templates/cursor_usage.yaml#/templates/alice
+      unique_key: cursor-alice-20260105
+      date: 1767571200000
+      acceptedLinesAdded: 40
+      totalTabsAccepted: 50
+      agentRequests: 30
+
+    - $ref: templates/cursor_usage.yaml#/templates/alice   # re-sync duplicate → sums must NOT double
+      unique_key: cursor-alice-20260105
+      date: 1767571200000
+      acceptedLinesAdded: 40
+      totalTabsAccepted: 50
+      agentRequests: 30
+
+    - $ref: templates/cursor_usage.yaml#/templates/bob
+      unique_key: cursor-bob-20260105
+      date: 1767571200000
+      acceptedLinesAdded: 20
+      totalTabsAccepted: 20
+      agentRequests: 10
+
+    - $ref: templates/cursor_usage.yaml#/templates/carol
+      unique_key: cursor-carol-20260105
+      date: 1767571200000
+      acceptedLinesAdded: 10
+      totalTabsAccepted: 10
+      agentRequests: 5
+
+# IC Bullet AI (…0013): value = the requested person's own sum (from $filter);
+# median/range = over their team (org_unit). One request returns every metric_key;
+# each rule asserts one. Numbers picked so median ≠ mean and value=alice; the
+# duplicate must dedup (else alice's sums would double).
+#   cursor_lines:       [alice 40, bob 20, carol 10] → value 40, median 20, range 10–40
+#   cursor_completions: [alice 50, bob 20, carol 10] → value 50, median 20, range 10–50
+#   cursor_agents:      [alice 30, bob 10, carol 5]  → value 30, median 10, range  5–30
+cases:
+  - name: cursor metrics — IC bullet (alice value vs team median, dedup holds)
+    request:
+      url: /v1/metrics/queries
+      method: POST
+      body:
+        queries:
+          - id: ai
+            metric_id: 00000000-0000-0000-0001-000000000013
+            $top: 50
+            $filter: "person_id eq 'alice@example.com' and metric_date ge '2026-01-01' and metric_date le '2026-01-31'"
+            $orderby: metric_key
+    expect:
+      - assert: "status == 200"
+      - in: ai
+        assert: "result.status == 'ok'"
+      - in: ai
+        find: { metric_key: cursor_lines }
+        equal: { value: 40, median: 20, range_min: 10, range_max: 40 }
+      - in: ai
+        find: { metric_key: cursor_completions }
+        equal: { value: 50, median: 20, range_min: 10, range_max: 50 }
+      - in: ai
+        find: { metric_key: cursor_agents }
+        equal: { value: 30, median: 10, range_min: 5, range_max: 30 }
