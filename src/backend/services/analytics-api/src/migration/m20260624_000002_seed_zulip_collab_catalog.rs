@@ -136,7 +136,10 @@ impl MigrationTrait for Migration {
             .await?;
         }
 
-        tracing::info!(seeded = SEEDS.len(), "zulip collab metric_catalog seed applied");
+        tracing::info!(
+            seeded = SEEDS.len(),
+            "zulip collab metric_catalog seed applied"
+        );
         Ok(())
     }
 
@@ -156,9 +159,7 @@ mod tests {
     #[test]
     fn one_seed_routed_to_collab_bullet_rows() {
         assert_eq!(SEEDS.len(), 1);
-        assert!(SEEDS[0]
-            .metric_key
-            .starts_with("collab_bullet_rows."));
+        assert!(SEEDS[0].metric_key.starts_with("collab_bullet_rows."));
         assert_eq!(SEEDS[0].source_tags, &["zulip-proxy"]);
     }
 }
