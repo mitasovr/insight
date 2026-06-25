@@ -51,8 +51,17 @@ def test_e2e_metric_smoke(
     #    pulls <connector>__bronze_promoted), then the silver class models.
     staging, silver = dbt_runner.derive_selectors(test_yaml.touched_tables)
     if staging:
+        # Record staging models in the ledger BEFORE building. They live in the
+        # `staging` schema and are read by the silver models via union_by_tag, so a
+        # prior test's staging rows (e.g. dates this test doesn't re-seed) would
+        # survive into the silver rebuild and contaminate later tests' gold-view
+        # aggregates. Recording up front (not after) means a build that raises
+        # partway still leaves the table in the truncate ledger so the next test
+        # cleans it; recording a model that never materialised is harmless
+        # (truncate_touched uses TRUNCATE TABLE IF EXISTS).
+        for st in staging:
+            ch_seeder.ledger.record("staging", st)
         dbt_runner.build(" ".join(f"+{m}" for m in staging), worker_ctx=worker_ctx)
-
     # 3b. Connector enrich steps (descriptor.images.enrich), between staging and
     #     silver — mirrors prod: dbt(tag:<c>) → <c>-enrich → dbt(silver). Data-driven
     #     from descriptors, so any connector with an enrich step participates (jira
@@ -80,9 +89,12 @@ def test_e2e_metric_smoke(
     for step in ran_enrich_steps:
         silver_set.update(dbt_runner.ephemeral_silver_targets(step.name))
     if silver_set:
-        dbt_runner.build(" ".join(sorted(silver_set)), worker_ctx=worker_ctx)
+        # Record before building (same rationale as staging above): a build that
+        # raises partway still leaves the targets in the truncate ledger for the
+        # next test to clean.
         for cls in silver_set:
             ch_seeder.ledger.record("silver", cls)
+        dbt_runner.build(" ".join(sorted(silver_set)), worker_ctx=worker_ctx)
 
     # 4. Recreate gold views against the now-real silver schema (fixes the rig-only
     #    Code 80 nullability mismatch on date-filtered reads), then refresh MVs.
