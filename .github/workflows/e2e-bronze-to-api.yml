@@ -44,18 +44,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ─── Cache cargo target/ across runs ────────────────────────────────
-      - name: Cache cargo target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            src/backend/target
-          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('src/backend/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-e2e-
-
-      # ─── Build / pull the runner image (BuildKit caches between PRs) ────
+      # ─── Build the runner image ─────────────────────────────────────────
+      # The runner bakes in analytics-api + each connector's enrich binary, each
+      # compiled FROM ITS OWN Dockerfile via build-only services wired as
+      # `additional_contexts` (see compose/docker-compose.runner.yml). Nothing is
+      # compiled inside the runner at test time, so there is no host cargo cache to
+      # restore. NOTE: those component builds are not yet wired into a cross-run
+      # BuildKit cache, so a full compile happens each run (follow-up: add buildx
+      # `type=gha` cache to the build-only services if it bites).
       - name: Build runner image
         run: ./e2e.sh build
 
@@ -71,8 +67,8 @@ jobs:
       # conftest.py — per-worker analytics-api spawns race SeaORM migrations
       # in the shared MariaDB, non-primary workers don't wait for ClickHouse
       # migrations, and the shared dbt target/ dir is deleted by whichever
-      # worker finishes first). Wall-time cost is negligible: the image and
-      # cargo builds dominate the job.
+      # worker finishes first). Wall-time cost is negligible: the runner image
+      # build (which compiles analytics-api + enrich) dominates the job.
       - name: Run E2E suite
         run: ./e2e.sh test --tb=short -q
 

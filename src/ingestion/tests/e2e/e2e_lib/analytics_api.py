@@ -33,87 +33,6 @@ from e2e_lib.config import SessionConfig, TENANT_HEADER, TEST_TENANT_ID
 LOG = logging.getLogger("e2e.api")
 
 
-def _required_cargo_version(repo_root: Path) -> tuple[int, int] | None:
-    """Read the required toolchain version from the single source of truth:
-    `[workspace.package].rust-version` in src/backend/Cargo.toml.
-
-    A hardcoded constant here silently drifts behind the real requirement (it
-    was pinned at 1.92 while the crates moved to 1.95), which let a broken build
-    masquerade as "version OK". Reading Cargo.toml keeps the precheck honest.
-
-    Returns None if it can't be determined — the `cargo build` itself remains
-    the hard gate (it fails loudly), so the precheck is only for a nicer message.
-    """
-    cargo_toml = repo_root / "src/backend/Cargo.toml"
-    try:
-        import tomllib
-
-        data = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))
-    except (OSError, ValueError, ImportError):
-        return None
-    ver = (
-        data.get("workspace", {}).get("package", {}).get("rust-version")
-        or data.get("package", {}).get("rust-version")
-    )
-    if not ver:
-        return None
-    nums = str(ver).split(".")
-    try:
-        return int(nums[0]), int(nums[1])
-    except (IndexError, ValueError):
-        return None
-
-
-def _cargo_version_at_least(cargo: str, *, major: int, minor: int) -> tuple[bool, str]:
-    """Return (ok, reported_version). On parse failure: (True, "?") — assume modern."""
-    try:
-        proc = subprocess.run(
-            [cargo, "--version"], capture_output=True, text=True, check=False, timeout=10
-        )
-    except (OSError, subprocess.SubprocessError):
-        return True, "?"
-    if proc.returncode != 0:
-        return True, "?"
-    # Output looks like: "cargo 1.92.0 (abcdef 2025-02-20)"
-    parts = proc.stdout.strip().split()
-    if len(parts) < 2:
-        return True, proc.stdout.strip() or "?"
-    version = parts[1]
-    nums = version.split(".")
-    if len(nums) < 2:
-        return True, version
-    try:
-        cur = (int(nums[0]), int(nums[1]))
-    except ValueError:
-        return True, version
-    return cur >= (major, minor), version
-
-
-def _resolve_cargo() -> str | None:
-    """Find a cargo executable.
-
-    pytest may inherit a PATH without `~/.cargo/bin` even though the user's
-    interactive shell has it (`~/.cargo/env` is sourced in .bashrc/.zshrc but
-    not necessarily in the env pytest launches from). Try PATH first, then
-    well-known rustup locations.
-    """
-    found = shutil.which("cargo")
-    if found:
-        return found
-    home = os.environ.get("HOME") or ""
-    for candidate in (
-        os.environ.get("CARGO_HOME", ""),
-        f"{home}/.cargo",
-        "/usr/local/cargo",
-    ):
-        if not candidate:
-            continue
-        path = os.path.join(candidate, "bin", "cargo")
-        if os.path.isfile(path) and os.access(path, os.X_OK):
-            return path
-    return None
-
-
 @dataclass(frozen=True)
 class ApiResponse:
     """Deserialized analytics-api response.
@@ -155,69 +74,34 @@ class ApiSpawnError(RuntimeError):
     pass
 
 
-def build(cfg: SessionConfig) -> Path:
-    """Cargo-build the release binary; return the path to the artifact.
+def locate_binary(cfg: SessionConfig) -> Path:
+    """Locate the analytics-api binary baked into the runner image.
 
-    Idempotent: re-running with no source changes is near-instant.
+    The rig no longer compiles analytics-api. The binary is built FROM ITS OWN
+    Dockerfile (`src/backend/services/analytics-api/Dockerfile`, the same one that
+    ships the prod image — no build-recipe duplication) and baked onto PATH at
+    `/usr/local/bin/analytics-api` via docker-compose.runner.yml `additional_contexts`
+    + a Dockerfile.runner `COPY --from=analytics-api …`. Same pattern as the connector
+    enrich binaries (see e2e_lib/enrich.py).
 
-    Raises `ApiSpawnError` (not FileNotFoundError) when cargo isn't installed,
-    so the `analytics_api` fixture's skip guard catches it cleanly.
+    Falls back to a PATH lookup and a host-mode cargo target (for running pytest
+    directly on the host with a manual `cargo build`), then fails clearly.
     """
-    cargo = _resolve_cargo()
-    if cargo is None:
-        raise ApiSpawnError(
-            "cargo executable not found on PATH or in standard rustup locations. "
-            "Install via `rustup` and ensure ~/.cargo/bin is on PATH (or set CARGO_HOME)."
-        )
-    version = "?"
-    required = _required_cargo_version(cfg.repo_root)
-    if required is not None:
-        ok, version = _cargo_version_at_least(cargo, major=required[0], minor=required[1])
-        if not ok:
-            raise ApiSpawnError(
-                f"cargo {version} is too old — src/backend/Cargo.toml requires "
-                f"rust-version ≥ {required[0]}.{required[1]}. "
-                f"Run `rustup update stable` and retry."
-            )
-    # Force cargo to recompile the analytics-api crate from the CURRENT source.
-    #
-    # The repo is bind-mounted into the runner; on Docker Desktop (macOS) the
-    # mtimes cargo reads through that mount do not reliably advance when files
-    # are edited on the host, so cargo's fingerprint check misses new/changed
-    # sources (most painfully: a new SeaORM migration) and relinks a stale
-    # cached object instead of recompiling. The binary then silently lacks the
-    # migration — tests fail with NO_ZULIP / size off-by-one and no `down -v`
-    # short of a full cold rebuild fixes it. Bumping the mtimes here (a real
-    # write the container's FS layer registers) makes cargo recompile the crate
-    # every run. Only the analytics-api crate is affected (it is a leaf bin —
-    # nothing depends on it); its dependencies stay cached, so the cost is one
-    # crate recompile (~1-2 min), not a cold build.
-    crate_src = cfg.repo_root / "src/backend/services/analytics-api/src"
-    touched = 0
-    for rs in crate_src.rglob("*.rs"):
-        rs.touch()
-        touched += 1
-    LOG.info("touched %d analytics-api source files to force a fresh compile", touched)
-    LOG.info("cargo build --release -p analytics-api  (cargo=%s, version=%s)", cargo, version)
-    try:
-        result = subprocess.run(
-            [cargo, "build", "--release", "-p", "analytics-api"],
-            cwd=str(cfg.repo_root / "src/backend"),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=600,
-        )
-    except FileNotFoundError as e:
-        raise ApiSpawnError(f"cargo at {cargo} not executable: {e}") from e
-    if result.returncode != 0:
-        raise ApiSpawnError(
-            f"cargo build failed (exit={result.returncode}):\n{result.stderr[-2000:]}"
-        )
-    binary = cfg.repo_root / "src/backend/target/release/analytics-api"
-    if not binary.exists():
-        raise ApiSpawnError(f"binary not at expected path: {binary}")
-    return binary
+    candidates: list[Path] = []
+    which = shutil.which("analytics-api")
+    if which:
+        candidates.append(Path(which))
+    candidates.append(Path("/usr/local/bin/analytics-api"))  # baked into the runner image
+    candidates.append(cfg.repo_root / "src/backend/target/release/analytics-api")  # host-mode manual build
+    for c in candidates:
+        if c.exists():
+            LOG.info("using analytics-api binary at %s", c)
+            return c
+    raise ApiSpawnError(
+        "analytics-api binary not found — it should be baked into the runner image at "
+        "/usr/local/bin/analytics-api (docker-compose.runner.yml `analytics-api` service "
+        "+ Dockerfile.runner COPY --from). Rebuild with `./e2e.sh build`."
+    )
 
 
 def find_free_port() -> int:

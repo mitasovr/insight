@@ -27,6 +27,16 @@ services:
       dockerfile: Dockerfile
     image: insight-e2e-enrich-jira:local
 
+  # Build-only helper: compiles analytics-api FROM ITS OWN Dockerfile (same as the
+  # prod image, build context src/backend). Consumed by the runner via
+  # additional_contexts (COPY --from) and baked in — the runner no longer compiles
+  # anything, so its image carries no Rust toolchain.
+  analytics-api:
+    build:
+      context: ${INSIGHT_REPO_ROOT:-../../../..}/src/backend
+      dockerfile: services/analytics-api/Dockerfile
+    image: insight-e2e-analytics-api:local
+
   runner:
     build:
       # Resolved by ../e2e.sh; CI workflow also exports this. We use an
@@ -39,6 +49,7 @@ services:
       # `COPY --from=<name>` in Dockerfile.runner pulls the compiled binary.
       additional_contexts:
         jira-enrich: "service:jira-enrich"
+        analytics-api: "service:analytics-api"
     image: insight-e2e-runner:latest
     container_name: insight-e2e-runner
     working_dir: /workspace/src/ingestion/tests/e2e
@@ -69,13 +80,5 @@ services:
       # the compose/ directory here — using ${INSIGHT_REPO_ROOT} sidesteps
       # the level-counting question entirely.
       - ${INSIGHT_REPO_ROOT}:/workspace
-      # Persistent caches across container restarts — first run cold-builds
-      # cargo (3-5 min), subsequent runs are incremental (<30s).
-      - cargo-cache:/usr/local/cargo/registry
-      - cargo-target:/workspace/src/backend/target
     networks:
       - insight-e2e
-
-volumes:
-  cargo-cache:
-  cargo-target:

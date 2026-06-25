@@ -31,7 +31,7 @@ from pathlib import Path
 
 from e2e_lib import clickhouse as ch
 from e2e_lib import compose, mariadb
-from e2e_lib.analytics_api import AnalyticsApiProcess, build, find_free_port
+from e2e_lib.analytics_api import AnalyticsApiProcess, find_free_port, locate_binary
 from e2e_lib.ch_seeder import CHSeeder
 from e2e_lib.config import SessionConfig
 from e2e_lib.dbt_runner import DbtRunner
@@ -158,21 +158,22 @@ def dbt_runner(ch_migrations_applied: SessionConfig):
 
 @pytest.fixture(scope="session")
 def analytics_api(ch_migrations_applied: SessionConfig):
-    """Build + spawn the analytics-api binary. Its SeaORM migrations run on startup;
-    we then upsert any test-specific metrics from seed/metrics.yaml.
+    """Spawn the analytics-api binary baked into the runner image. Its SeaORM
+    migrations run on startup; we then upsert test-specific metrics from
+    seed/metrics.yaml.
 
-    If `cargo build` fails, this is a hard FAIL — identical locally and in CI.
+    If the binary is missing, this is a hard FAIL — identical locally and in CI.
     A skip here would make the whole transformation suite silently green while
-    testing nothing (e.g. when the runner's toolchain drifts behind the version
-    src/backend/Cargo.toml requires). If the binary can't build, the bronze→API
-    tests cannot run, so the only honest result is red.
+    testing nothing. The binary is built FROM ITS OWN Dockerfile and baked into the
+    runner image (see e2e_lib.analytics_api.locate_binary); if it isn't there the
+    bronze→API tests cannot run, so the only honest result is red.
     """
     cfg = ch_migrations_applied
     from e2e_lib.analytics_api import ApiSpawnError  # local import to keep top clean
     try:
-        binary = build(cfg)
+        binary = locate_binary(cfg)
     except ApiSpawnError as e:
-        pytest.fail(f"analytics-api binary not buildable: {e}", pytrace=False)
+        pytest.fail(f"analytics-api binary not available: {e}", pytrace=False)
     port = find_free_port()
     proc = AnalyticsApiProcess(cfg, binary, port)
     proc.start()
