@@ -63,6 +63,7 @@ CREATE DATABASE IF NOT EXISTS bronze_claude_team;
 CREATE DATABASE IF NOT EXISTS bronze_claude_enterprise;
 CREATE DATABASE IF NOT EXISTS bronze_outline;
 CREATE DATABASE IF NOT EXISTS bronze_confluence;
+CREATE DATABASE IF NOT EXISTS bronze_chatgpt_team;
 SQL
 
 # ---------------------------------------------------------------------------
@@ -1315,6 +1316,37 @@ CREATE TABLE IF NOT EXISTS bronze_claude_enterprise.claude_enterprise_users (
 SQL
 fi
 
+# bronze_chatgpt_team.chatgpt_team_codex_user_daily — per-user/day Codex usage
+# pulled via the chatgpt-team-proxy from chatgpt.com's usage-leaderboard.
+# chatgpt_team__ai_dev_usage reads email/date/n_threads/lines_added/credits/etc.
+# Identity columns are non-null `string` in the connector catalog → String here.
+if ! ch_table_exists bronze_chatgpt_team chatgpt_team_codex_user_daily; then
+  echo "  Creating placeholder: bronze_chatgpt_team.chatgpt_team_codex_user_daily"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_chatgpt_team.chatgpt_team_codex_user_daily (
+    tenant_id              String,
+    source_id              String,
+    unique_key             String,
+    collected_at           String,
+    data_source            String,
+    date                   String,
+    email                  String,
+    user_id                Nullable(String),
+    name                   Nullable(String),
+    credits                Nullable(Float64),
+    n_threads              Nullable(Float64),
+    n_turns                Nullable(Float64),
+    current_streak         Nullable(Float64),
+    text_tokens            Nullable(Float64),
+    lines_added            Nullable(Float64),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
 # bronze_outline.wiki_pages — Outline document snapshot (author/version/space). Feeds outline__wiki_pages → class_wiki_pages.
 if ! ch_table_exists bronze_outline wiki_pages; then
   echo "  Creating placeholder: bronze_outline.wiki_pages"
@@ -1530,6 +1562,36 @@ CREATE TABLE IF NOT EXISTS bronze_confluence.wiki_inline_comment_replies (
     author_id                Nullable(String),
     created_at               Nullable(String),
     resolution_status        Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
+# bronze_chatgpt_team.chatgpt_team_chat_activity — per-user/day chat usage pulled
+# via the chatgpt-team-proxy from chatgpt.com's analytics user_list endpoint.
+# chatgpt_team__ai_assistant_usage reads email/date/messages/*_messages/etc.
+if ! ch_table_exists bronze_chatgpt_team chatgpt_team_chat_activity; then
+  echo "  Creating placeholder: bronze_chatgpt_team.chatgpt_team_chat_activity"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_chatgpt_team.chatgpt_team_chat_activity (
+    tenant_id              String,
+    source_id              String,
+    unique_key             String,
+    collected_at           String,
+    data_source            String,
+    date                   String,
+    email                  String,
+    name                   Nullable(String),
+    seat_type              Nullable(String),
+    messages               Nullable(Float64),
+    gpt_messages           Nullable(Float64),
+    tool_messages          Nullable(Float64),
+    connector_messages     Nullable(Float64),
+    project_messages       Nullable(Float64),
+    credits_used           Nullable(Float64),
     _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
     _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
     _airbyte_meta          String        DEFAULT '{}',

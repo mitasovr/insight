@@ -164,6 +164,13 @@ _SESSION_START_TRUNCATE = [
     # session-start reset, a warm re-run (reused CH volume, no `./e2e.sh down`)
     # appends the same rows again → duplicate unique_keys → the unique test fails.
     ("staging", "cursor__ai_dev_usage"),
+    # chatgpt_team specs build staging.chatgpt_team__ai_dev_usage (codex) and
+    # staging.chatgpt_team__ai_assistant_usage (chat) — both incremental `append`
+    # models with a dbt `unique` test on unique_key. Session-start reset keeps
+    # warm re-runs (reused CH volume, no `./e2e.sh down`) from accumulating
+    # duplicate keys.
+    ("staging", "chatgpt_team__ai_dev_usage"),
+    ("staging", "chatgpt_team__ai_assistant_usage"),
 ]
 
 
