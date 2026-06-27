@@ -757,6 +757,15 @@ CREATE TABLE IF NOT EXISTS bronze_jira.jira_user (
     _airbyte_generation_id UInt32        DEFAULT 0
 ) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
 SQL
+else
+  # Reconcile a pre-existing jira_user (warm cluster, or one already created by
+  # the Jira connector before this column was added): the create branch above is
+  # skipped, so add tenant_id in place. confluence__wiki_pages' jira_user join
+  # reads it and fails to compile otherwise. Idempotent (ADD COLUMN IF NOT EXISTS).
+  echo "  Reconciling placeholder schema: bronze_jira.jira_user (tenant_id)"
+  run_ch <<'SQL'
+ALTER TABLE bronze_jira.jira_user ADD COLUMN IF NOT EXISTS tenant_id Nullable(String);
+SQL
 fi
 
 # bronze_jira.jira_issue_history — Jira changelog. jira__changelog_items.sql

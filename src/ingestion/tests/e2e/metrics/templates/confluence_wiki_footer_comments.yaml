@@ -10,6 +10,7 @@ templates:
     source_id: "wiki-test"
     page_id: null
     comment_id: null
+    parent_comment_id: null
     author_id: null
     created_at: null
     resolution_status: null
