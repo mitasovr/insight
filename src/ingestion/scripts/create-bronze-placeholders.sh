@@ -1163,6 +1163,38 @@ CREATE TABLE IF NOT EXISTS bronze_claude_team.claude_team_code_metrics (
 SQL
 fi
 
+# bronze_claude_team.claude_team_overage_spend — per-seat credit spend-vs-limit
+# snapshot (claude.ai /overage_spend_limits). claude_team__ai_overage reads
+# account_uuid/account_email/monthly_credit_limit/used_credits/etc. Identity
+# columns are non-null `string` in the connector InlineSchemaLoader → String here.
+if ! ch_table_exists bronze_claude_team claude_team_overage_spend; then
+  echo "  Creating placeholder: bronze_claude_team.claude_team_overage_spend"
+  run_ch <<'SQL'
+CREATE TABLE IF NOT EXISTS bronze_claude_team.claude_team_overage_spend (
+    tenant_id              String,
+    source_id              String,
+    unique_key             String,
+    collected_at           String,
+    data_source            String,
+    account_uuid           String,
+    account_email          String,
+    account_name           String,
+    seat_tier              Nullable(String),
+    is_enabled             Nullable(Bool),
+    monthly_credit_limit   Nullable(Float64),
+    used_credits           Nullable(Float64),
+    currency               Nullable(String),
+    out_of_credits         Nullable(Bool),
+    used_credits_basis     Nullable(String),
+    limit_type             Nullable(String),
+    _airbyte_raw_id        String        DEFAULT toString(generateUUIDv4()),
+    _airbyte_extracted_at  DateTime64(3) DEFAULT now64(3),
+    _airbyte_meta          String        DEFAULT '{}',
+    _airbyte_generation_id UInt32        DEFAULT 0
+) ENGINE = ReplacingMergeTree(_airbyte_extracted_at) ORDER BY unique_key;
+SQL
+fi
+
 # bronze_zulip_proxy.users — Zulip user directory (full-refresh each sync).
 # Joined by id = messages.sender_id to attach the sender email.
 if ! ch_table_exists bronze_zulip_proxy users; then

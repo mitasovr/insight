@@ -142,6 +142,9 @@ _SESSION_START_TRUNCATE = [
     # keeps warm re-runs (reused CH volume, no `./e2e.sh down`) from accumulating
     # duplicate keys.
     ("staging", "claude_team__ai_dev_usage"),
+    # claude_team__ai_overage (cc_overage) is also incremental `append` with a
+    # dbt `unique` test — reset it too for warm-rerun determinism.
+    ("staging", "claude_team__ai_overage"),
 ]
 
 
