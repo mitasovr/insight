@@ -1,7 +1,14 @@
 spec_version: 1
 description: >
-  cursor_active (Cursor — active members) — 1 per active member; an "active"
-  metric, so value=1 for the requested person and range_max = team headcount.
+  Metric: cursor_active — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: Cursor daily per-developer usage report — one row marks a Cursor user
+    • silver: deduped to one row per developer/day
+    • gold:   an "active" metric — value=1 for the requested person; range_max =
+              count of active Cursor members in the team (median is 0 by rule)
+
+  Team (median/range = the person's department):
+    alice · bob · carol all active → value 1, median 0, range [0, 3].
 
 bronze:
   bronze_bamboohr.employees:

@@ -1,7 +1,15 @@
 spec_version: 1
 description: >
-  active_ai_members (Active members) — tool-agnostic: 1 per (person, day) for any
-  AI tool row (gold Branch 1). An "active" metric → value=1, range_max = headcount.
+  Metric: active_ai_members — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: any AI-tool daily usage report (here Cursor) — one row marks a user
+    • silver: deduped to one row per person/day across all AI tools
+    • gold:   tool-agnostic "active" metric — value=1 for the requested person if
+              they used any AI tool that day; range_max = count of active members
+              in the team (median is 0 by rule)
+
+  Team (median/range = the person's department):
+    alice · bob · carol all active → value 1, median 0, range [0, 3].
 
 bronze:
   bronze_bamboohr.employees:

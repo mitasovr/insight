@@ -1,7 +1,13 @@
 spec_version: 1
 description: >
-  cursor_agents (Cursor Agent Interactions) — Σ agent_sessions per person
-  (agent_sessions ← agentRequests). gold insight.ai_bullet_rows → IC Bullet AI.
+  Metric: cursor_agents — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: Cursor daily per-developer usage report (agent requests)
+    • silver: deduped to one row per developer/day carrying the agent-request count
+    • gold:   metric = sum of Cursor agent requests over the window
+
+  Team (median/range = the person's department):
+    alice 30 · bob 10 · carol 5 → median 10, range [5, 30].
 
 bronze:
   bronze_bamboohr.employees:

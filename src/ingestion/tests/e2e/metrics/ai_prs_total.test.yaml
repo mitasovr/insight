@@ -1,7 +1,13 @@
 spec_version: 1
 description: >
-  prs_total (Total PRs, CC window) — locked ComingSoon stub. Not emitted by any
-  connector, so the AI bullet serves NULL. Assert it stays NULL.
+  Metric: prs_total — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: none — total-PRs attribution is not yet ingested
+    • silver: none
+    • gold:   locked "coming soon" stub — served as a hardcoded NULL regardless of
+              seeded data
+
+  Cases: one Cursor row so the person appears in the bullet; the stub stays NULL.
 
 bronze:
   bronze_bamboohr.employees:

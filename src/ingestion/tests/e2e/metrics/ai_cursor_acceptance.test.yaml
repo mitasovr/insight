@@ -1,9 +1,14 @@
 spec_version: 1
 description: >
-  cursor_acceptance (Cursor Acceptance Rate) — reconstructed in query_ref as
-  round(100 * Σcursor_completions / Σcursor_offered, 1) per person
-  (completions ← totalTabsAccepted, offered ← totalTabsShown). Assert the
-  API-served value (alice = 100*50/80 = 62.5).
+  Metric: cursor_acceptance — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: Cursor daily per-developer usage report (tab completions shown & accepted)
+    • silver: deduped to one row per developer/day carrying shown + accepted counts
+    • gold:   a reconstructed ratio — 100 × Σ accepted ÷ Σ shown, rounded to 0.1
+              (computed at serve time, not stored as a row)
+
+  Team (value = the requested person):
+    alice accepted 50 of 80 shown → 100×50/80 = 62.5.
 
 bronze:
   bronze_bamboohr.employees:

@@ -1,7 +1,13 @@
 spec_version: 1
 description: >
-  cursor_completions (Cursor Completions) — Σ tool_use_accepted per person
-  (tool_use_accepted ← totalTabsAccepted). gold insight.ai_bullet_rows → IC Bullet AI.
+  Metric: cursor_completions — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: Cursor daily per-developer usage report (tab completions accepted)
+    • silver: deduped to one row per developer/day carrying the accepted-completions count
+    • gold:   metric = sum of accepted tab-completions over the window
+
+  Team (median/range = the person's department):
+    alice 50 · bob 20 · carol 10 → median 20, range [10, 50].
 
 bronze:
   bronze_bamboohr.employees:

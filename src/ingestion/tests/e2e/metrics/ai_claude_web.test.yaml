@@ -1,7 +1,13 @@
 spec_version: 1
 description: >
-  claude_web (Claude.ai Activity) — locked ComingSoon stub, hardcoded NULL in the
-  AI bullet query_ref. Assert it stays NULL. Only the requested person is needed.
+  Metric: claude_web — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: none — Claude.ai web activity is not yet ingested
+    • silver: none
+    • gold:   locked "coming soon" stub — served as a hardcoded NULL regardless of
+              seeded data
+
+  Cases: one Cursor row so the person appears in the bullet; the stub stays NULL.
 
 bronze:
   bronze_bamboohr.employees:

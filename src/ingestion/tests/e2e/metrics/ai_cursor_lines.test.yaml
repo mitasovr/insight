@@ -1,8 +1,14 @@
 spec_version: 1
 description: >
-  cursor_lines (Cursor Accepted Lines) — Σ acceptedLinesAdded per person.
-  bronze_cursor.cursor_daily_usage → cursor__ai_dev_usage → silver
-  class_ai_dev_usage → gold insight.ai_bullet_rows → IC Bullet AI (…0013).
+  Metric: cursor_lines — IC Bullet AI (…0013), #1440.
+  How it's computed (bronze → silver → gold):
+    • bronze: Cursor daily per-developer usage report (accepted lines, completions, agents)
+    • silver: deduped to one row per developer/day carrying the accepted-lines count
+    • gold:   metric = sum of AI-accepted lines over the window
+
+  Team (median/range = the person's department):
+    alice 40 · bob 20 · carol 10 (alice row re-synced once → must not double)
+    → median 20, range [10, 40].
 
 bronze:
   bronze_bamboohr.employees:
