@@ -4,11 +4,10 @@ the GitHub Actions `changes` job. Sources the component↔path map and the
 per-component collection params from components.py (the shared registry) — so no
 globs are duplicated in YAML and there is one source of truth. Runs no tests.
 
-Usage: python3 scripts/ci/changed.py
-Output: {"rust": [<entry>...], "dotnet": [...], "python": [...], "lint_backend": bool}
-        where each <entry> carries the fields its producer job needs to collect
-        coverage (rust: package/all_features, dotnet: solution, python: cov_package),
-        and lint_backend says whether rust-lint must run for the src/backend workspace.
+Usage: python3 scripts/ci/changed.py [--all]
+Output: {"rust": [<entry>...], "dotnet": [...], "python": [...]}
+        rust entries carry name/root/package/all_features plus lint+cover flags
+        (a crate may be lint-only); dotnet carries solution, python cov_package.
 """
 from __future__ import annotations
 
@@ -19,20 +18,25 @@ import sys
 
 from components import ROOT, COMPARE_BRANCH, COMPONENTS, component_for
 
-# Workspace-level Rust files under this root (Cargo.toml/lock, clippy.toml,
-# rustfmt.toml, a shared crate) map to no single component. A change to one must
-# still run rust-lint — it lints the whole src/backend workspace (clippy.toml
-# steers clippy directly) — else such a change would silently bypass linting.
+# The src/backend Cargo workspace. fmt+clippy run per crate in the rust matrix,
+# but linting has cross-crate reach: a change to a workspace-level Rust file
+# (clippy.toml, Cargo.*) or a shared lib/plugin should re-lint EVERY backend
+# crate (catches a shared change breaking a dependent), while a service change
+# lints only itself. Coverage stays strictly per-changed-crate regardless.
 BACKEND_RUST_ROOT = "src/backend"
 _SHARED_RUST_SUFFIXES = (".rs", ".toml", ".lock")
+_SHARED_BACKEND_DIRS = ("src/backend/libs/", "src/backend/plugins/")
 
 
-def _matrix_entry(comp: dict) -> dict:
-    """The fields a producer CI job needs to collect coverage for one component."""
+def _matrix_entry(comp: dict, *, lint: bool = False, cover: bool = True) -> dict:
+    """The fields a producer CI job needs for one component. Rust entries also
+    carry lint/cover flags (a rust crate may appear lint-only)."""
     entry = {"name": comp["name"], "root": comp["root"]}
     if comp["lang"] == "rust":
         entry["package"] = comp.get("package", comp["name"])
         entry["all_features"] = comp.get("all_features", True)
+        entry["lint"] = lint
+        entry["cover"] = cover
     elif comp["lang"] == "dotnet":
         entry["solution"] = comp.get("solution", "")
     elif comp["lang"] == "python":
@@ -40,17 +44,18 @@ def _matrix_entry(comp: dict) -> dict:
     return entry
 
 
-def changed_components(compare_branch: str, components: list[dict]) -> dict[str, object]:
+def changed_components(compare_branch: str, components: list[dict]) -> dict[str, list]:
     """Map the diff (vs the merge-base with compare_branch) to changed components,
-    grouped by language, as rich CI-matrix entries, plus a `lint_backend` flag.
-    CI runs one producer job per entry, so only the components a PR touches are
-    built; coverage stays strictly per-component (no sibling fanout)."""
+    grouped by language, as rich CI-matrix entries. CI runs one job per entry;
+    coverage is strictly per-changed-crate, while a shared backend Rust change
+    fans lint (only) out to every backend crate."""
     out = subprocess.run(
         ["git", "diff", "--name-only", f"{compare_branch}...HEAD"],
         cwd=ROOT, capture_output=True, text=True, check=True,
     ).stdout
+    by_name = {c["name"]: c for c in components}
     changed: set[str] = set()
-    backend_shared = False
+    fanout_lint = False  # a shared-config / lib / plugin change re-lints all backend crates
     for line in out.splitlines():
         path = line.strip()
         if not path:
@@ -58,30 +63,36 @@ def changed_components(compare_branch: str, components: list[dict]) -> dict[str,
         name = component_for(path, components)
         if name:
             changed.add(name)
+            comp = by_name[name]
+            if (comp["lang"] == "rust" and comp.get("root") == BACKEND_RUST_ROOT
+                    and path.startswith(_SHARED_BACKEND_DIRS)):
+                fanout_lint = True  # a shared lib/plugin changed → re-lint dependents
         elif path.startswith(BACKEND_RUST_ROOT + "/") and path.endswith(_SHARED_RUST_SUFFIXES):
-            backend_shared = True  # workspace-level Rust file (clippy.toml, Cargo.*, …)
-    result: dict[str, object] = {lang: [] for lang in ("rust", "dotnet", "python")}
+            fanout_lint = True  # workspace-level Rust file (clippy.toml, Cargo.*, …)
+
+    result: dict[str, list] = {lang: [] for lang in ("rust", "dotnet", "python")}
     for comp in components:  # registry order → deterministic matrix
-        if comp["name"] in changed:
-            result[comp["lang"]].append(_matrix_entry(comp))
-    # rust-lint lints the whole src/backend workspace, so run it when any backend
-    # Rust *source* changed OR a workspace-level Rust file did. Shared changes
-    # trigger LINT only — never a coverage fanout: they touch no crate's source
-    # (nothing new to cover), and fanning out would break per-component isolation.
-    backend_rust = {c["name"] for c in components
-                    if c["lang"] == "rust" and c.get("root") == BACKEND_RUST_ROOT}
-    result["lint_backend"] = backend_shared or bool(changed & backend_rust)
+        name, lang = comp["name"], comp["lang"]
+        if lang == "rust":
+            is_backend = comp.get("root") == BACKEND_RUST_ROOT
+            cover = name in changed
+            lint = cover or (fanout_lint and is_backend)
+            if lint or cover:
+                result["rust"].append(_matrix_entry(comp, lint=lint, cover=cover))
+        elif name in changed:  # dotnet / python: in the matrix iff changed
+            result[lang].append(_matrix_entry(comp))
     return result
 
 
-def all_components(components: list[dict]) -> dict[str, object]:
-    """Emit EVERY component as a matrix entry — for a manual full/baseline run
-    (workflow_dispatch with full=true), independent of the diff."""
-    result: dict[str, object] = {lang: [] for lang in ("rust", "dotnet", "python")}
+def all_components(components: list[dict]) -> dict[str, list]:
+    """Emit EVERY component as a matrix entry (rust = lint+cover) — for a manual
+    full/baseline run (workflow_dispatch with full=true), independent of the diff."""
+    result: dict[str, list] = {lang: [] for lang in ("rust", "dotnet", "python")}
     for comp in components:
-        result[comp["lang"]].append(_matrix_entry(comp))
-    result["lint_backend"] = any(
-        c["lang"] == "rust" and c.get("root") == BACKEND_RUST_ROOT for c in components)
+        if comp["lang"] == "rust":
+            result["rust"].append(_matrix_entry(comp, lint=True, cover=True))
+        else:
+            result[comp["lang"]].append(_matrix_entry(comp))
     return result
 
 

@@ -53,7 +53,6 @@ jobs:
       rust: ${{ steps.detect.outputs.rust }}
       dotnet: ${{ steps.detect.outputs.dotnet }}
       python: ${{ steps.detect.outputs.python }}
-      lint_backend: ${{ steps.detect.outputs.lint_backend }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -76,50 +75,13 @@ jobs:
           echo "rust=$(echo "$changed" | jq -c .rust)" >> "$GITHUB_OUTPUT"
           echo "dotnet=$(echo "$changed" | jq -c .dotnet)" >> "$GITHUB_OUTPUT"
           echo "python=$(echo "$changed" | jq -c .python)" >> "$GITHUB_OUTPUT"
-          echo "lint_backend=$(echo "$changed" | jq -r .lint_backend)" >> "$GITHUB_OUTPUT"
 
-  # fmt + clippy gate for the backend workspace (separate from coverage so the
-  # `-D warnings` lint gate is one check, not repeated across the matrix).
-  rust-lint:
-    name: Rust — fmt & clippy
-    needs: changes
-    # Runs for any src/backend Rust change — component source OR a workspace-level
-    # file (clippy.toml, Cargo.*) — so a shared change can't bypass linting.
-    if: ${{ needs.changes.outputs.lint_backend == 'true' }}
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: src/backend
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false # don't leave the token in .git/config
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.95.0"
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src/backend -> target
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        env:
-          RUSTFLAGS: "-D warnings"
-        run: cargo clippy --all-targets --all-features
-
-  # One producer job per changed Rust crate. Collects coverage inline with
-  # cargo-llvm-cov (coverage.py no longer runs tests); the matrix entry carries
-  # the crate's root/package/all_features from the registry.
+  # One unified job per Rust crate: fmt + clippy (when entry.lint) and coverage
+  # (when entry.cover). Replaces the old standalone workspace rust-lint — fmt and
+  # clippy now run per crate, gated by the lint flag from changed.py (a shared
+  # backend change fans lint out to every crate; coverage stays per-changed-crate).
   rust:
-    name: Rust coverage — ${{ matrix.entry.name }}
+    name: Rust — ${{ matrix.entry.name }}
     needs: changes
     if: ${{ needs.changes.outputs.rust != '[]' }}
     runs-on: ubuntu-latest
@@ -138,8 +100,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.95.0"
-          # llvm-tools-preview ships the LLVM coverage tooling cargo-llvm-cov drives.
-          components: llvm-tools-preview
+          # rustfmt + clippy for the lint steps; llvm-tools-preview for cargo-llvm-cov.
+          components: rustfmt, clippy, llvm-tools-preview
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -150,11 +112,30 @@ jobs:
             src/ingestion/connectors/task-tracking/jira/enrich -> target
           key: ${{ matrix.entry.name }}
 
+      - name: Format check (${{ matrix.entry.name }})
+        if: ${{ matrix.entry.lint }}
+        working-directory: ${{ matrix.entry.root }}
+        run: cargo fmt -p ${{ matrix.entry.package }} -- --check
+
+      - name: Clippy (${{ matrix.entry.name }})
+        if: ${{ matrix.entry.lint }}
+        working-directory: ${{ matrix.entry.root }}
+        # -D warnings stays on clippy only — never the coverage build (it would
+        # turn jira-enrich's feature-gated dead code into a hard error).
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: |
+          feats=""
+          if [ "${{ matrix.entry.all_features }}" = "true" ]; then feats="--all-features"; fi
+          cargo clippy -p ${{ matrix.entry.package }} --all-targets $feats
+
       - uses: taiki-e/install-action@v2
+        if: ${{ matrix.entry.cover }}
         with:
           tool: cargo-llvm-cov
 
       - name: Coverage (${{ matrix.entry.name }} -> Cobertura)
+        if: ${{ matrix.entry.cover }}
         working-directory: ${{ matrix.entry.root }}
         run: |
           set -euo pipefail
@@ -166,6 +147,7 @@ jobs:
             --output-path "$GITHUB_WORKSPACE/coverage/rust-${{ matrix.entry.name }}.cobertura.xml"
 
       - name: Upload Cobertura
+        if: ${{ matrix.entry.cover }}
         uses: actions/upload-artifact@v7
         with:
           name: cobertura-rust-${{ matrix.entry.name }}
@@ -350,9 +332,11 @@ jobs:
           PYTHON_CHANGED: ${{ needs.changes.outputs.python }}
           FULL: ${{ github.event.inputs.full }}
         run: |
+          # Only crates that actually produce coverage are "required" — rust
+          # entries may be lint-only (cover=false), so filter them out.
           required=$(jq -rn \
             --argjson r "$RUST_CHANGED" --argjson d "$DOTNET_CHANGED" --argjson p "$PYTHON_CHANGED" \
-            '[$r[], $d[], $p[]] | map(.name) | join(",")')
+            '[($r[] | select(.cover)), $d[], $p[]] | map(.name) | join(",")')
           echo "required components: ${required:-<none>}"
           # A full/baseline run measures overall coverage; skip the new-code gate
           # (there is no meaningful "patch" for a manual all-components run).
