@@ -30,6 +30,7 @@ Create `tests/<domain>/assert_<subject>_<rule>.sql`:
     meta={
         'title': 'Short human label',
         'domain': 'collab',            -- collab | git | task | ai | hr | gold | ...
+        'connector': 'zoom',           -- source connector, or 'silver' for cross-connector checks
         'category': 'physical_bound',  -- source_uniqueness | grain | physical_bound | freshness | ...
         'tier': 'error',               -- triage importance: info | warn | error
         'remediation': 'What to check / how to fix when this fires.'
@@ -61,6 +62,10 @@ Conventions:
   stop the pipeline.
 - **`meta.tier`** is independent of the gate — how alarming a violation is to a
   human, surfaced in the finding regardless of the gate.
+- **`meta.connector`** names the source connector (e.g. `zoom`, `jira`) or
+  `silver` for cross-connector checks. It is emitted on every finding and
+  promoted to a Loki label, so the Grafana data-quality alert can group and
+  route by connector. Findings without it land under `connector="unknown"`.
 - Register any new gold view in `silver/_shared/gold_sources.yml` before
   referencing it with `source('gold', '<view>')`.
 - Read `ReplacingMergeTree` tables with `FINAL` (or the project's dedup pattern)

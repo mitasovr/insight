@@ -110,6 +110,10 @@ spec:
                   "check_id": n.get("name"),
                   "title": meta.get("title", n.get("name")),
                   "domain": meta.get("domain", "unknown"),
+                  # connector lets the Grafana alert group findings per source
+                  # (promoted to a Loki label via `| json`). Defaults to
+                  # "unknown" for cross-connector / silver-generic checks.
+                  "connector": meta.get("connector", "unknown"),
                   "category": meta.get("category", "uncategorized"),
                   "gate": cfg.get("severity"),
                   "tier": meta.get("tier", "warn"),
