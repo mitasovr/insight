@@ -80,6 +80,12 @@ LIFECYCLES = [
 
 CREATED_AT = "2026-03-01 09:00:00"
 
+CLEAR_SOURCE = (
+    "DELETE FROM silver.class_task_field_history WHERE insight_source_id = {src:String}",
+    "DELETE FROM silver.class_task_users WHERE insight_source_id = {src:String}",
+    "DELETE FROM silver.class_task_statuses WHERE insight_source_id = {src:String}",
+)
+
 
 def event_order(at: str, band: int, rank: int) -> int:
     millis = int(datetime.fromisoformat(at).replace(tzinfo=UTC).timestamp() * 1000)
@@ -139,8 +145,8 @@ def status_row(status_id: str, category: str) -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def built(warehouse: Warehouse) -> Warehouse:
-    for table in ("class_task_field_history", "class_task_users", "class_task_statuses"):
-        warehouse.execute(f"DELETE FROM silver.{table} WHERE insight_source_id = {{src:String}}", {"src": SOURCE})
+    for statement in CLEAR_SOURCE:
+        warehouse.execute(statement, {"src": SOURCE})
 
     warehouse.insert(
         "silver.class_task_users",
