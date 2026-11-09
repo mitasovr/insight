@@ -1,5 +1,5 @@
 import { CalendarIcon, CircleAlert } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useState } from "react";
 import type { DateRange as DayPickerRange } from "react-day-picker";
 
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/api/period-to-date-range";
 import {
   Button,
+  Calendar,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -21,8 +22,8 @@ import {
   ToggleGroup,
   ToggleGroupItem,
 } from "@gears-frontx/ui-kit";
-import { Calendar } from "@/components/ui/calendar";
 import { formatRange } from "@/lib/date-range-label";
+import { keepNavigationKeysInside } from "@/lib/keep-navigation-keys-inside";
 import type { CustomRange, PeriodValue } from "@/types/insight";
 
 function formatLongDate(d: Date): string {
@@ -42,21 +43,6 @@ const TABS: { value: PeriodValue; label: string; short: string }[] = [
 
 const SEGMENT =
   "bg-card text-muted-foreground aria-pressed:bg-selection-subtle aria-pressed:text-foreground";
-
-const COMPOSITE_NAVIGATION_KEYS = new Set([
-  "ArrowLeft",
-  "ArrowRight",
-  "ArrowUp",
-  "ArrowDown",
-  "Home",
-  "End",
-]);
-
-// WORKAROUND: the popover is portalled out of the DOM but not out of the React
-// tree, so its key events bubble to the ToggleGroup, whose roving focus takes them.
-function keepNavigationKeysInside(event: KeyboardEvent<HTMLDivElement>) {
-  if (COMPOSITE_NAVIGATION_KEYS.has(event.key)) event.stopPropagation();
-}
 
 export interface PeriodSelectorBarProps {
   period: PeriodValue;
@@ -174,7 +160,7 @@ export function PeriodSelectorBar({
           />
           <PopoverContent
             align="end"
-            className="w-auto p-0"
+            className="w-auto gap-0 p-0"
             onKeyDown={keepNavigationKeysInside}
           >
             {tempRange?.from ? (
@@ -193,6 +179,11 @@ export function PeriodSelectorBar({
             ) : null}
             <Calendar
               mode="range"
+              weekStartsOn={1}
+              captionLayout="dropdown"
+              fixedWeeks
+              endMonth={latestPickableDay()}
+              className="p-3"
               resetOnSelect
               showOutsideDays={false}
               selected={tempRange}
