@@ -23,6 +23,7 @@ import {
 } from "@gears-frontx/ui-kit";
 import { usePortalPeriod } from "@/hooks/use-portal-period";
 import { personDisplayName } from "@/lib/identities/person-display";
+import { offeredMetricFilter } from "@/lib/insight/groups";
 import { flattenSubordinates } from "@/lib/insight/identity-tree";
 import { metricHelp, type MetricHelpText } from "@/lib/insight/metric-help";
 import type { NormalizedMetricResult } from "@/lib/metrics/collection";
@@ -40,7 +41,6 @@ import {
   setMetricsViewPaneShown,
   useMetricsViewPaneShown,
 } from "@/lib/portal/metrics-view-pane";
-import { metricVisible } from "@/lib/portal/nav-policy";
 import { usePortalNavActions, usePortalScope } from "@/lib/portal/portal-nav";
 import { usePortalSearch, useSetPortalSearch } from "@/lib/portal/portal-search";
 import { usePortalShowPlanned } from "@/lib/portal/portal-store";
@@ -61,9 +61,7 @@ export function MetricsView() {
 
   const catalog = useMemo(
     () =>
-      metricsViewCatalog(definitions.data?.metrics ?? [], (key) =>
-        metricVisible(key, showPlanned),
-      ),
+      metricsViewCatalog(definitions.data?.metrics ?? [], offeredMetricFilter(showPlanned)),
     [definitions.data, showPlanned],
   );
   const catalogKeys = useMemo(
