@@ -6,7 +6,8 @@
 -- assignee or worklog author, plus its email when the tracker states one. The
 -- analytics runtime resolves account-first through `identity.account_assignment`
 -- and falls back to `identity.person_map` while it serves. An unresolvable row
--- stays and starts counting the moment it resolves.
+-- stays and starts counting the moment it resolves; until then it, and every
+-- unassigned issue's row, counts only in the unattributed share.
 SELECT
     src.tenant_id,
     src.source_key,
@@ -254,6 +255,20 @@ worklog_flow AS (
         CAST([] AS Array(Tuple(key String, value String, label Nullable(String)))) AS no_dimensions
     FROM {{ ref('task_worklog_flow') }}
 ),
+-- Account grain, not the person-day of worklog_flow: a sum needs no gate, so
+-- each account's hours keep its key and resolve account-first.
+logged_work AS (
+    SELECT
+        tenant_id,
+        entity_id,
+        account_source_type,
+        account_source_id,
+        account_id,
+        metric_date,
+        worklog_seconds,
+        CAST([] AS Array(Tuple(key String, value String, label Nullable(String)))) AS no_dimensions
+    FROM ({{ task_worklog_per_account_day() }})
+),
 stale AS (
     SELECT
         s.tenant_id                                                          AS tenant_id,
@@ -304,6 +319,10 @@ value_measures AS (
 
     UNION ALL
 
+    {{ sum_measure('logged_hours', 'logged_work', 'worklog_seconds / 3600.0', 'no_dimensions', where='worklog_seconds > 0', keys=account_keys) }}
+
+    UNION ALL
+
     {{ sum_measure('stale_in_progress', 'stale', 'stale_count', 'no_dimensions', keys=account_keys) }}
 )
 SELECT
@@ -341,7 +360,6 @@ SELECT
 FROM value_measures
 WHERE tenant_id IS NOT NULL
   AND entity_id IS NOT NULL
-  AND (entity_id != '' OR account_id != '')
   AND metric_date IS NOT NULL
 
 UNION ALL
@@ -372,7 +390,6 @@ SELECT
 FROM issue_item_evidence
 WHERE tenant_id IS NOT NULL
   AND entity_id IS NOT NULL
-  AND (entity_id != '' OR account_id != '')
   AND metric_date IS NOT NULL
 
 UNION ALL
@@ -407,6 +424,5 @@ ARRAY JOIN arrayConcat(
 ) AS duration_measure
 WHERE tenant_id IS NOT NULL
   AND entity_id IS NOT NULL
-  AND (entity_id != '' OR account_id != '')
   AND metric_date IS NOT NULL
 ) AS src
