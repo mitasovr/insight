@@ -13,7 +13,7 @@ name: slack
 #   definition and restores the connection state; bronze keeps its meaning.
 #   Staging drops a row with a NULL message counter instead of reading it as 0
 #   (none exist on vz, so no full refresh is needed).
-version: "2027.1.0"
+version: "2027.2.0"
 type: cdk
 schedule: 0 4 * * *
 # images.cdk.image stays empty until the first main build of build-images.yml,
@@ -23,7 +23,7 @@ images:
     name: source-slack-insight
     dockerfile: ./Dockerfile
     context: .
-    image: ""
+    image: "ghcr.io/constructorfabric/source-slack-insight:2026.11.12.09.21-3400fcd"
 dbt_select: tag:slack+
 workflow: sync
 connection:
