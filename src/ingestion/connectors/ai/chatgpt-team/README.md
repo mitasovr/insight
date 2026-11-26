@@ -36,7 +36,7 @@ not Insight's concern.
 | Stream | Endpoint (proxy `/api/*` → `chatgpt.com/backend-api/*`) | Sync mode | Pagination | `unique_key` |
 |--------|----------|-----------|------------|--------------|
 | `chatgpt_team_seats` | `/api/accounts/{account_id}/users` | Full refresh | offset/limit | `{tenant}-{source}-{user_id}` |
-| `chatgpt_team_chat_activity` | `/api/accounts/{account_id}/analytics/user_list` | Incremental (`date`) | cursor (`after_cursor`) | `{tenant}-{source}-{date}-{email}` |
+| `chatgpt_team_chat_activity` | `/api/accounts/{account_id}/analytics/user_list` | Incremental (`date`) | cursor (`cursor` + `query_id`) | `{tenant}-{source}-{date}-{email}` |
 | `chatgpt_team_codex_user_daily` | `/api/wham/analytics/usage-leaderboard` | Incremental (`date`) | page-number | `{tenant}-{source}-{date}-{email}` |
 | `chatgpt_team_codex_user_daily_org` | `/api/wham/analytics/usage-leaderboard` | Incremental (`date`) | none (`page_size=1`) | `{tenant}-{source}-{date}-{read_at}` |
 | `chatgpt_team_subscription_usage` | `/api/subscriptions/{org_id}/usage` | Full refresh (snapshot) | none | `{tenant}-{source}-{snapshot_date}-{model}` |

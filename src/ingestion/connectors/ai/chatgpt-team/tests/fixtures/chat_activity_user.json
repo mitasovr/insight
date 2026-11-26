@@ -1,0 +1,11 @@
+{
+  "email": "user@example.com",
+  "name": "Example User",
+  "seat_type": "default",
+  "messages": 0,
+  "gpt_messages": 0,
+  "tool_messages": 0,
+  "connector_messages": 0,
+  "project_messages": 0,
+  "credits_used": 0
+}

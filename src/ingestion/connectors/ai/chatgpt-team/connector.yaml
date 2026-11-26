@@ -253,7 +253,7 @@ streams:
   # ── Stream 2: chatgpt_team_chat_activity ────────────────────────────
   # Per-user per-day chat usage. Endpoint:
   #   GET /backend-api/accounts/{account_id}/analytics/user_list
-  # Response: {users: [...], next_cursor}. Cursor-paginated within a day;
+  # Response: {users: [...], next_cursor, query_id}. Cursor-paginated within a day;
   # DatetimeBasedCursor walks days. `date` injected from the cursor.
   - type: DeclarativeStream
     name: chatgpt_team_chat_activity
@@ -288,24 +288,31 @@ streams:
         <<: *base_requester
         path: "/api/accounts/{{ config['chatgpt_account_id'] }}/analytics/user_list"
         request_parameters:
-          page_size: "100"
           order_by_field: "messages"
           order_by_direction: "DESC"
+          # WORKAROUND: the CDK drops a parameter that renders empty, so the
+          # first request of a day carries neither value.
+          cursor: "{{ next_page_token['next_page_token']['cursor'] if next_page_token else '' }}"
+          query_id: "{{ next_page_token['next_page_token']['query_id'] if next_page_token else '' }}"
         error_handler: *session_error_handler
       record_selector:
         type: RecordSelector
         extractor:
           type: DpathExtractor
           field_path: [users]
+      # INVARIANT: a follow-up page sends `cursor` and `query_id` together. The
+      # endpoint ignores an unknown parameter such as `after_cursor` and answers
+      # page one again with a new next_cursor, so the walk never ends.
       paginator:
         type: DefaultPaginator
         pagination_strategy:
           type: CursorPagination
-          cursor_value: "{{ response.get('next_cursor', '') }}"
-          stop_condition: "{{ not response.get('next_cursor') }}"
-        page_token_option:
+          page_size: 100
+          cursor_value: "{{ {'cursor': response.get('next_cursor'), 'query_id': response.get('query_id')} }}"
+          stop_condition: "{{ not response.get('next_cursor') or not response.get('query_id') or last_page_size < page_size }}"
+        page_size_option:
           type: RequestOption
-          field_name: after_cursor
+          field_name: page_size
           inject_into: request_parameter
     incremental_sync: *day_cursor
     transformations:
